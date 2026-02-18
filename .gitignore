@@ -1,0 +1,10 @@
+# Data & Models
+data/
+models/*.pth
+models/*.onnx
+
+# Python & System junk
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints
