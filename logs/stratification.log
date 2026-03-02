@@ -1,0 +1,83 @@
+2026-02-28 13:30:35,392 - INFO - ============================================================
+2026-02-28 13:30:35,392 - INFO - STRATIFIED SPLITTING FOR MEDICAL IMAGING DATASET
+2026-02-28 13:30:35,392 - INFO - ============================================================
+2026-02-28 13:30:35,392 - INFO - Loading training data from: c:\Users\kheza\Desktop\NeuroSight_AI\notebooks\data\raw\train
+2026-02-28 13:30:35,392 - INFO - Loading files from c:\Users\kheza\Desktop\NeuroSight_AI\notebooks\data\raw\train
+2026-02-28 13:30:35,409 - INFO - Found 896 files in MildDemented
+2026-02-28 13:30:35,424 - INFO - Found 64 files in ModerateDemented
+2026-02-28 13:30:35,451 - INFO - Found 3200 files in NonDemented
+2026-02-28 13:30:35,540 - INFO - Found 2240 files in VeryMildDemented
+2026-02-28 13:30:35,567 - INFO - Total files loaded: 6400
+2026-02-28 13:30:35,568 - INFO - Loading test data from: c:\Users\kheza\Desktop\NeuroSight_AI\notebooks\data\raw\test
+2026-02-28 13:30:35,568 - INFO - Loading files from c:\Users\kheza\Desktop\NeuroSight_AI\notebooks\data\raw\test
+2026-02-28 13:30:35,578 - INFO - Found 896 files in MildDemented
+2026-02-28 13:30:35,593 - INFO - Found 64 files in ModerateDemented
+2026-02-28 13:30:35,619 - INFO - Found 3200 files in NonDemented
+2026-02-28 13:30:35,699 - INFO - Found 2240 files in VeryMildDemented
+2026-02-28 13:30:35,727 - INFO - Total files loaded: 6400
+2026-02-28 13:30:35,728 - INFO - 
+==================================================
+2026-02-28 13:30:35,729 - INFO - Initial Training Data Distribution: 6400 total samples
+2026-02-28 13:30:35,729 - INFO - ==================================================
+2026-02-28 13:30:35,729 - INFO -   NonDemented: 3200 (50.00%)
+2026-02-28 13:30:35,729 - INFO -   VeryMildDemented: 2240 (35.00%)
+2026-02-28 13:30:35,729 - INFO -   MildDemented: 896 (14.00%)
+2026-02-28 13:30:35,729 - INFO -   ModerateDemented: 64 (1.00%)
+2026-02-28 13:30:35,729 - INFO - ==================================================
+
+2026-02-28 13:30:35,731 - INFO - 
+==================================================
+2026-02-28 13:30:35,731 - INFO - Test Data Distribution: 6400 total samples
+2026-02-28 13:30:35,731 - INFO - ==================================================
+2026-02-28 13:30:35,731 - INFO -   NonDemented: 3200 (50.00%)
+2026-02-28 13:30:35,732 - INFO -   VeryMildDemented: 2240 (35.00%)
+2026-02-28 13:30:35,732 - INFO -   MildDemented: 896 (14.00%)
+2026-02-28 13:30:35,732 - INFO -   ModerateDemented: 64 (1.00%)
+2026-02-28 13:30:35,732 - INFO - ==================================================
+
+2026-02-28 13:30:35,732 - INFO - Splitting TRAIN data into Train/Validation (val_size=0.20)
+2026-02-28 13:30:35,743 - INFO - 
+============================================================
+2026-02-28 13:30:35,745 - INFO - FINAL SPLIT DISTRIBUTIONS
+2026-02-28 13:30:35,745 - INFO - ============================================================
+2026-02-28 13:30:35,745 - INFO - 
+==================================================
+2026-02-28 13:30:35,746 - INFO - Training Set Distribution: 5120 total samples
+2026-02-28 13:30:35,746 - INFO - ==================================================
+2026-02-28 13:30:35,746 - INFO -   NonDemented: 2560 (50.00%)
+2026-02-28 13:30:35,746 - INFO -   VeryMildDemented: 1792 (35.00%)
+2026-02-28 13:30:35,746 - INFO -   MildDemented: 717 (14.00%)
+2026-02-28 13:30:35,746 - INFO -   ModerateDemented: 51 (1.00%)
+2026-02-28 13:30:35,746 - INFO - ==================================================
+
+2026-02-28 13:30:35,746 - INFO - 
+==================================================
+2026-02-28 13:30:35,746 - INFO - Validation Set Distribution: 1280 total samples
+2026-02-28 13:30:35,746 - INFO - ==================================================
+2026-02-28 13:30:35,746 - INFO -   NonDemented: 640 (50.00%)
+2026-02-28 13:30:35,746 - INFO -   VeryMildDemented: 448 (35.00%)
+2026-02-28 13:30:35,746 - INFO -   MildDemented: 179 (13.98%)
+2026-02-28 13:30:35,747 - INFO -   ModerateDemented: 13 (1.02%)
+2026-02-28 13:30:35,747 - INFO - ==================================================
+
+2026-02-28 13:30:35,747 - INFO - 
+==================================================
+2026-02-28 13:30:35,748 - INFO - Test Set Distribution: 6400 total samples
+2026-02-28 13:30:35,748 - INFO - ==================================================
+2026-02-28 13:30:35,748 - INFO -   NonDemented: 3200 (50.00%)
+2026-02-28 13:30:35,748 - INFO -   VeryMildDemented: 2240 (35.00%)
+2026-02-28 13:30:35,748 - INFO -   MildDemented: 896 (14.00%)
+2026-02-28 13:30:35,748 - INFO -   ModerateDemented: 64 (1.00%)
+2026-02-28 13:30:35,748 - INFO - ==================================================
+
+2026-02-28 13:30:35,750 - INFO - 
+Stratification Check (Train vs Validation)
+2026-02-28 13:30:35,751 - INFO - Class                Train %    Val %     
+2026-02-28 13:30:35,751 - INFO - MildDemented         14.00      13.98     
+2026-02-28 13:30:35,751 - INFO - ModerateDemented     1.00       1.02      
+2026-02-28 13:30:35,751 - INFO - NonDemented          50.00      50.00     
+2026-02-28 13:30:35,751 - INFO - VeryMildDemented     35.00      35.00     
+2026-02-28 13:30:35,834 - INFO - Split files saved to c:\Users\kheza\Desktop\NeuroSight_AI\data\processed
+2026-02-28 13:30:35,834 - INFO - ============================================================
+2026-02-28 13:30:35,834 - INFO - STRATIFIED SPLITTING COMPLETED SUCCESSFULLY
+2026-02-28 13:30:35,834 - INFO - ============================================================
