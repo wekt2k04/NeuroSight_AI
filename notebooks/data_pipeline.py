@@ -4,22 +4,29 @@ NeuroSight AI - Data Pipeline Module (Engineered Version)
 
 Ce module centralise la logique avancée de préparation des données :
 - Reproductibilité (Seeds fixes)
-- Séparation stricte des augmentations (Train vs Validation)
-- Interception dynamique (TransformedSubset)
-- Équilibrage robuste (WeightedRandomSampler avec np.bincount)
-- Optimisation GPU (pin_memory, num_workers)
-- Fonctions d'audit et de visualisation visuelle
+- Imputation MICE (IterativeImputer) pour les données cliniques manquantes
+- Zéro Data Leakage (GroupShuffleSplit par ID Patient)
+- Équilibrage robuste (WeightedRandomSampler)
+- Sortie Pure CNN : (Image, Label) pour compatibilité directe avec EfficientNet.
 """
 
 import os
+import re
 import torch
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from collections import Counter
-from typing import Tuple, Dict, List
+from typing import Tuple, List
+from PIL import Image
 
-from torch.utils.data import DataLoader, random_split, WeightedRandomSampler, Subset, Dataset
-from torchvision import datasets, transforms
+from torch.utils.data import DataLoader, WeightedRandomSampler, Dataset
+from torchvision import transforms
+
+# Activation expérimentale requise par scikit-learn pour IterativeImputer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from sklearn.model_selection import GroupShuffleSplit
 
 # ==========================================================
 # 1. CONFIGURATION & REPRODUCTIBILITÉ
@@ -31,180 +38,166 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 fixed_generator = torch.Generator().manual_seed(SEED)
 
+CDR_TO_CLASS = {
+    0.0: 0, # NonDemented
+    0.5: 1, # VeryMildDemented
+    1.0: 2, # MildDemented
+    2.0: 3  # ModerateDemented
+}
+CLASS_NAMES = ['NonDemented', 'VeryMildDemented', 'MildDemented', 'ModerateDemented']
 
 # ==========================================================
-# 2. TRANSFORMS (LES DEUX CUISINES)
+# 2. CLASSE DATASET PERSONNALISÉE
 # ==========================================================
-def get_transforms(img_size: int = 224) -> Tuple[transforms.Compose, transforms.Compose]:
-    """
-    Crée les pipelines de transformation pour l'entraînement et la validation.
-    """
-    # Pipeline d'entraînement : On "muscle" l'IA (Augmentation de données)
-    train_transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.RandomHorizontalFlip(p=0.5),      # Symétrie
-        transforms.RandomRotation(degrees=15),       # Légères rotations
-        transforms.ColorJitter(brightness=0.1, contrast=0.1), # Variations scanner
-        transforms.ToTensor(),
-        # Normalisation ImageNet requise pour EfficientNet
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    # Pipeline de validation : Stérile et clinique
-    val_transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    return train_transform, val_transform
-
-
-# ==========================================================
-# 3. L'INTERCEPTEUR (ÉVITER LA FUITE DE DONNÉES)
-# ==========================================================
-class TransformedSubset(Dataset):
-    """
-    Classe wrapper pour appliquer dynamiquement une transformation
-    spécifique (train ou val) après avoir coupé le dataset.
-    """
-    def __init__(self, subset, transform=None):
-        self.subset = subset
+class OASISDataset(Dataset):
+    """Dataset PyTorch qui charge les images 2D et les associe aux étiquettes."""
+    def __init__(self, df: pd.DataFrame, transform=None):
+        self.df = df
         self.transform = transform
-        
-    def __getitem__(self, index):
-        x, y = self.subset[index]
-        if self.transform:
-            x = self.transform(x)
-        return x, y
-        
+
     def __len__(self):
-        return len(self.subset)
+        return len(self.df)
 
-
-# ==========================================================
-# 4. ORCHESTRATION (DATALOADERS & SAMPLER)
-# ==========================================================
-def get_dataloaders(data_dir: str, 
-                    batch_size: int = 32, 
-                    val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
-    """
-    Fonction principale pour charger, équilibrer et optimiser les données.
-    """
-    
-    # 1. Chargement brut (SANS transformation pour le moment)
-    full_dataset = datasets.ImageFolder(root=data_dir)
-    classes = full_dataset.classes
-    
-    # 2. Découpage (Split) avec graine fixe
-    train_size = int((1.0 - val_split) * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_indices, val_indices = random_split(
-        full_dataset, [train_size, val_size], generator=fixed_generator
-    )
-
-    # 3. Équilibrage des classes (WeightedRandomSampler)
-    # Extraction sécurisée des étiquettes (targets) du sous-ensemble d'entraînement
-    train_targets = np.array([full_dataset.targets[i] for i in train_indices.indices])
-    
-    # Comptage via numpy (rapide et robuste)
-    class_sample_count = np.bincount(train_targets, minlength=len(classes))
-    
-    # Calcul des poids (1 / fréquence) avec protection division par zéro
-    weight = np.divide(1., class_sample_count, 
-                       out=np.zeros_like(class_sample_count, dtype=float), 
-                       where=class_sample_count != 0)
-    
-    # Attribution du poids à chaque image d'entraînement
-    samples_weight = torch.from_numpy(np.array([weight[t] for t in train_targets]))
-    
-    # Le Croupier (Sampler)
-    sampler = WeightedRandomSampler(
-        weights=samples_weight, 
-        num_samples=len(samples_weight), 
-        replacement=True
-    )
-
-    # 4. Application des transformations via l'Intercepteur
-    train_transform, val_transform = get_transforms()
-    train_data = TransformedSubset(train_indices, transform=train_transform)
-    val_data = TransformedSubset(val_indices, transform=val_transform)
-
-    # 5. Création des usines (DataLoaders) optimisées
-    train_loader = DataLoader(
-        train_data, 
-        batch_size=batch_size, 
-        sampler=sampler,        # Utilise le sampler (donc shuffle=False implicite)
-        num_workers=2,          # Parallélisation CPU
-        pin_memory=True,        # Voie express vers le GPU
-        drop_last=True          # Stabilité mathématique
-    )
-
-    test_loader = DataLoader(
-        val_data, 
-        batch_size=batch_size, 
-        shuffle=False,          # Pas de mélange pour la validation
-        num_workers=2,
-        pin_memory=True
-    )
-
-    return train_loader, test_loader, classes
-
+    def __getitem__(self, idx):
+        img_path = self.df.iloc[idx]['path']
+        label = self.df.iloc[idx]['label']
+        
+        # Conversion RGB pour compatibilité avec EfficientNet
+        image = Image.open(img_path).convert('RGB')
+        
+        if self.transform:
+            image = self.transform(image)
+            
+        return image, label
 
 # ==========================================================
-# 5. FONCTIONS D'AUDIT ET VISUALISATION (Leila & Wilfried)
+# 3. FONCTION PRINCIPALE DE PIPELINE (FEATURE ENGINEERED)
 # ==========================================================
-def plot_class_distribution(dataset: Dataset) -> None:
+def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
     """
-    Affiche la distribution brute des classes pour l'audit.
+    Prépare les DataLoaders avec Imputation MICE et GroupSplit.
+    Signature adaptée pour Leila : renvoie (train_loader, val_loader, class_names).
     """
-    # Si c'est un TransformedSubset, on doit remonter à l'ImageFolder d'origine
-    if isinstance(dataset, TransformedSubset):
-        real_dataset = dataset.subset.dataset
-        indices = dataset.subset.indices
-        labels = [real_dataset.targets[i] for i in indices]
-        classes = real_dataset.classes
-    else:
-        labels = dataset.targets
-        classes = dataset.classes
+    print("📖 1. Chargement des données cliniques et Imputation MICE...")
+    try:
+        df_clinical = pd.read_csv(csv_path)
+    except Exception:
+        df_clinical = pd.read_excel(csv_path)
+        
+    # --- FEATURE ENGINEERING : Imputation MICE ---
+    # On utilise IterativeImputer pour deviner les valeurs manquantes (ex: MMSE)
+    # en se basant sur les autres caractéristiques du patient (Âge, SES, Educ).
+    cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
+    imputer = IterativeImputer(random_state=SEED, max_iter=10)
+    df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
+    print("   ✅ Imputation des valeurs manquantes terminée (MICE).")
 
-    counts = Counter(labels)
-    class_counts = {classes[idx]: count for idx, count in counts.items()}
+    # --- ASSOCIATION IMAGES / CSV ---
+    print(f"🔍 2. Scan du dossier d'images : {images_dir}")
+    valid_files = []
+    for root, _, files in os.walk(images_dir):
+        for file in files:
+            if file.endswith(('.jpg', '.png')):
+                match = re.search(r'(OAS1_\d+)', file)
+                if match:
+                    patient_id = match.group(1) + "_MR1"
+                    if patient_id in df_clinical['ID'].values:
+                        cdr_score = df_clinical.loc[df_clinical['ID'] == patient_id, 'CDR'].values[0]
+                        if pd.notna(cdr_score) and cdr_score in CDR_TO_CLASS:
+                            valid_files.append({
+                                'path': os.path.join(root, file),
+                                'patient_id': patient_id,
+                                'label': CDR_TO_CLASS[cdr_score]
+                            })
+                            
+    files_df = pd.DataFrame(valid_files)
+    if len(files_df) == 0:
+        raise ValueError("❌ Aucune image valide trouvée. Vérifiez les chemins.")
+    print(f"   ✅ {len(files_df)} images valides associées avec succès.")
+
+    # --- DATA LEAKAGE PREVENTION : Group Shuffle Split ---
+    print(f"\n🛡️ 3. Application du Group Split par ID Patient (Validation: {val_split*100}%)...")
+    gss = GroupShuffleSplit(n_splits=1, test_size=val_split, random_state=SEED)
+    train_idx, val_idx = next(gss.split(files_df, groups=files_df['patient_id']))
+    
+    train_df = files_df.iloc[train_idx].reset_index(drop=True)
+    val_df = files_df.iloc[val_idx].reset_index(drop=True)
+    
+    # Audit visuel dans la console
+    overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
+    print(f"   📊 Patients uniques Train : {len(set(train_df['patient_id']))}")
+    print(f"   📊 Patients uniques Val   : {len(set(val_df['patient_id']))}")
+    print(f"   🚨 Chevauchement (Leakage): {len(overlap)} patients (Doit être 0).")
+
+    # --- TRANSFORMATIONS ---
+    train_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomRotation(15),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    
+    val_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    train_dataset = OASISDataset(train_df, transform=train_transform)
+    val_dataset = OASISDataset(val_df, transform=val_transform)
+
+    # --- ÉQUILIBRAGE DES CLASSES ---
+    print("\n⚖️ 4. Calcul des poids pour l'équilibrage des classes (WeightedRandomSampler)...")
+    class_sample_count = np.bincount(train_df['label'])
+    weights = 1. / torch.tensor(class_sample_count, dtype=torch.float)
+    samples_weights = weights[train_df['label'].values]
+    sampler = WeightedRandomSampler(samples_weights, len(samples_weights))
+
+    # --- DATALOADERS ---
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    
+    print("🚀 Pipeline prêt ! Les DataLoaders vont générer des lots (Images, Labels).")
+    return train_loader, val_loader, CLASS_NAMES
+
+# ==========================================================
+# 4. FONCTIONS UTILITAIRES (EDA & AUDIT)
+# ==========================================================
+def plot_class_distribution(dataloader: DataLoader, classes: List[str]) -> None:
+    """Affiche la distribution des classes dans un DataLoader."""
+    all_labels = []
+    for _, labels in dataloader:
+        all_labels.extend(labels.numpy())
+        
+    counts = Counter(all_labels)
+    class_counts = {classes[k]: v for k, v in counts.items()}
 
     plt.figure(figsize=(10, 5))
     plt.bar(class_counts.keys(), class_counts.values(), color=['#4C72B0', '#55A868', '#C44E52', '#8172B2'])
-    plt.title("Distribution des Classes dans le Dataset")
+    plt.title("Distribution des Classes dans le Lot / DataLoader")
     plt.ylabel("Nombre d'images")
     plt.xticks(rotation=15)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.show()
 
-
 def show_sample_batch(dataloader: DataLoader, classes: List[str], num_samples: int = 8) -> None:
-    """
-    Récupère un lot, inverse la normalisation mathématique et l'affiche.
-    """
+    """Récupère un lot, inverse la normalisation mathématique et l'affiche."""
     images, labels = next(iter(dataloader))
-
-    # Dénormalisation pour affichage humain
+    
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-
     images = images * std + mean
-    images = torch.clamp(images, 0, 1) # Assure que les pixels restent entre 0 et 1
+    images = torch.clamp(images, 0, 1)
 
-    num_samples = min(num_samples, len(images))
-    cols = 4
-    rows = (num_samples + cols - 1) // cols
-
-    plt.figure(figsize=(15, 3 * rows))
-    for i in range(num_samples):
-        plt.subplot(rows, cols, i+1)
-        # Transformation CHW -> HWC pour l'écran
-        img = images[i].permute(1, 2, 0).numpy()
-        plt.imshow(img)
-        plt.title(classes[labels[i]])
-        plt.axis("off")
-
+    fig, axes = plt.subplots(1, min(num_samples, len(images)), figsize=(15, 3))
+    if num_samples == 1: axes = [axes]
+    
+    for i, ax in enumerate(axes):
+        img = images[i].numpy().transpose(1, 2, 0)
+        ax.imshow(img)
+        ax.set_title(classes[labels[i].item()])
+        ax.axis("off")
     plt.tight_layout()
     plt.show()
