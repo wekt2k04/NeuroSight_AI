@@ -78,7 +78,8 @@ def get_transforms(img_size: int = 224) -> Tuple[transforms.Compose, transforms.
 
     ])
 
-    return train_transform, val_transform
+    return TRAIN_TRANSFORMS, VAL_TRANSFORMS
+    
 
 
 # ==========================================================
