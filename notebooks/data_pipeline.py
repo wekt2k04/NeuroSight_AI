@@ -41,7 +41,7 @@ def get_transforms(img_size: int = 224) -> Tuple[transforms.Compose, transforms.
     """
     #---- changes applied in order to improve the performance of the model
     # Pipeline d'entraînement : On "muscle" l'IA (Augmentation de données)
-    train_transform = transforms.Compose([
+    TRAIN_TRANSFORMS = transforms.Compose([
         # transforms.Resize((img_size, img_size)),
         # transforms.RandomHorizontalFlip(p=0.5),      # Symétrie
         # transforms.RandomRotation(degrees=15),       # Légères rotations
@@ -66,7 +66,7 @@ def get_transforms(img_size: int = 224) -> Tuple[transforms.Compose, transforms.
     ])
 
     # Pipeline de validation : Stérile et clinique
-    val_transform = transforms.Compose([
+    VAL_TRANSFORMS = transforms.Compose([
         # transforms.Resize((img_size, img_size)),
         # transforms.ToTensor(),
         # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
