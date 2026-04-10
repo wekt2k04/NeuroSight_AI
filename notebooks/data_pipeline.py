@@ -39,22 +39,43 @@ def get_transforms(img_size: int = 224) -> Tuple[transforms.Compose, transforms.
     """
     Crée les pipelines de transformation pour l'entraînement et la validation.
     """
+    #---- changes applied in order to improve the performance of the model
     # Pipeline d'entraînement : On "muscle" l'IA (Augmentation de données)
     train_transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.RandomHorizontalFlip(p=0.5),      # Symétrie
-        transforms.RandomRotation(degrees=15),       # Légères rotations
-        transforms.ColorJitter(brightness=0.1, contrast=0.1), # Variations scanner
+        # transforms.Resize((img_size, img_size)),
+        # transforms.RandomHorizontalFlip(p=0.5),      # Symétrie
+        # transforms.RandomRotation(degrees=15),       # Légères rotations
+        # transforms.ColorJitter(brightness=0.1, contrast=0.1), # Variations scanner
+        # transforms.ToTensor(),
+        # # Normalisation ImageNet requise pour EfficientNet
+        # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.RandomResizedCrop(224, scale=(0.85, 1.0)),
+        transforms.RandomHorizontalFlip(p=0.5),   # OK for brain symmetry
+        transforms.RandomRotation(10),            # reduced (safer)
+        transforms.RandomAffine(
+            degrees=0,
+            translate=(0.02, 0.02),               # small shifts only
+            scale=(0.98, 1.02)
+        ),
+        transforms.ColorJitter(brightness=0.1, contrast=0.1),
         transforms.ToTensor(),
-        # Normalisation ImageNet requise pour EfficientNet
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.1, scale=(0.02, 0.05)),  # reduced
+
     ])
 
     # Pipeline de validation : Stérile et clinique
     val_transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
+        # transforms.Resize((img_size, img_size)),
+        # transforms.ToTensor(),
+        # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225]),
+
     ])
 
     return train_transform, val_transform
