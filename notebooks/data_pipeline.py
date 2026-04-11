@@ -169,7 +169,7 @@ def prepare_data(csv_path: str, images_dir: str,
 
     # ---------------- AUGMENTATION ----------------
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((260, 260)),
         transforms.RandomRotation(20),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(p=0.1),
