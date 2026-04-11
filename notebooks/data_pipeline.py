@@ -104,10 +104,138 @@ def stratified_group_split(df, val_split=0.2, seed=42):
 # ==========================================================
 # 4. MAIN PIPELINE
 # ==========================================================
+# def prepare_data(csv_path: str, images_dir: str,
+#                  batch_size: int = 32,
+#                  val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
+
+#     print("📖 Loading clinical data + MICE imputation...")
+
+#     try:
+#         df_clinical = pd.read_csv(csv_path)
+#     except Exception:
+#         df_clinical = pd.read_excel(csv_path)
+
+#     # ---------------- MICE IMPUTATION ----------------
+#     cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
+#     imputer = IterativeImputer(random_state=SEED, max_iter=10)
+#     df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
+#     print("   ✅ MICE imputation done.")
+
+#     # ---------------- IMAGE LINKING ----------------
+#     print(f"🔍 Scanning images: {images_dir}")
+
+#     valid_files = []
+
+#     for root, _, files in os.walk(images_dir):
+#         for file in files:
+#             if file.endswith(('.jpg', '.png')):
+#                 match = re.search(r'(OAS1_\d+)', file)
+#                 if match:
+#                     patient_id = match.group(1) + "_MR1"
+
+#                     if patient_id in df_clinical['ID'].values:
+#                         cdr_score = df_clinical.loc[
+#                             df_clinical['ID'] == patient_id, 'CDR'
+#                         ].values[0]
+
+#                         if pd.notna(cdr_score) and cdr_score in CDR_TO_CLASS:
+#                             valid_files.append({
+#                                 'path': os.path.join(root, file),
+#                                 'patient_id': patient_id,
+#                                 'label': CDR_TO_CLASS[cdr_score]
+#                             })
+
+#     files_df = pd.DataFrame(valid_files)
+
+#     if len(files_df) == 0:
+#         raise ValueError("❌ No valid images found.")
+
+#     print(f"   ✅ {len(files_df)} images linked.")
+
+#     # ---------------- STRATIFIED GROUP SPLIT ----------------
+#     print("\n🛡️ Stratified Group Split (patient-level + class-balanced)...")
+
+#     train_df, val_df = stratified_group_split(
+#         files_df,
+#         val_split=val_split,
+#         seed=SEED
+#     )
+
+#     overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
+
+#     print(f"   📊 Train patients: {len(set(train_df['patient_id']))}")
+#     print(f"   📊 Val patients  : {len(set(val_df['patient_id']))}")
+#     print(f"   🚨 Leakage check : {len(overlap)} (must be 0)")
+
+#     # ---------------- AUGMENTATION ----------------
+#     train_transform = transforms.Compose([
+#         transforms.Resize((260, 260)),
+#         transforms.RandomRotation(20),
+#         transforms.RandomHorizontalFlip(),
+#         transforms.RandomVerticalFlip(p=0.1),
+#         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+#         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
+#         transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+#         transforms.ToTensor(),
+#         transforms.Normalize([0.485, 0.456, 0.406],
+#                              [0.229, 0.224, 0.225]),
+#         transforms.RandomErasing(p=0.15, scale=(0.02, 0.1))
+#     ])
+
+#     val_transform = transforms.Compose([
+#         transforms.Resize((224, 224)),
+#         transforms.ToTensor(),
+#         transforms.Normalize([0.485, 0.456, 0.406],
+#                              [0.229, 0.224, 0.225])
+#     ])
+
+#     train_dataset = OASISDataset(train_df, transform=train_transform)
+#     val_dataset = OASISDataset(val_df, transform=val_transform)
+
+#     # ---------------- SAMPLER ----------------
+#     print("\n⚖️ Building WeightedRandomSampler...")
+
+#     class_sample_count = np.bincount(train_df['label'])
+#     class_weights = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
+
+#     samples_weights = class_weights[train_df['label'].values]
+
+#     sampler = WeightedRandomSampler(
+#         weights=samples_weights,
+#         num_samples=len(samples_weights),
+#         replacement=True
+#     )
+
+#     # ---------------- DATALOADERS ----------------
+#     train_loader = DataLoader(
+#         train_dataset,
+#         batch_size=batch_size,
+#         sampler=sampler,
+#         num_workers=2,
+#         pin_memory=True
+#     )
+
+#     val_loader = DataLoader(
+#         val_dataset,
+#         batch_size=batch_size,
+#         shuffle=False,
+#         num_workers=2,
+#         pin_memory=True
+#     )
+
+#     print("🚀 Pipeline ready.")
+
+#     return train_loader, val_loader, CLASS_NAMES
+
+
 def prepare_data(csv_path: str, images_dir: str,
                  batch_size: int = 32,
                  val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
-
+    """
+    NeuroSight AI - Nuclear Data Pipeline
+    Matches EfficientNet-B2 resolution and uses adversarial augmentation 
+    to prevent the severe overfitting observed in Iteration 2.
+    """
     print("📖 Loading clinical data + MICE imputation...")
 
     try:
@@ -123,7 +251,6 @@ def prepare_data(csv_path: str, images_dir: str,
 
     # ---------------- IMAGE LINKING ----------------
     print(f"🔍 Scanning images: {images_dir}")
-
     valid_files = []
 
     for root, _, files in os.walk(images_dir):
@@ -132,7 +259,6 @@ def prepare_data(csv_path: str, images_dir: str,
                 match = re.search(r'(OAS1_\d+)', file)
                 if match:
                     patient_id = match.group(1) + "_MR1"
-
                     if patient_id in df_clinical['ID'].values:
                         cdr_score = df_clinical.loc[
                             df_clinical['ID'] == patient_id, 'CDR'
@@ -146,44 +272,38 @@ def prepare_data(csv_path: str, images_dir: str,
                             })
 
     files_df = pd.DataFrame(valid_files)
-
     if len(files_df) == 0:
         raise ValueError("❌ No valid images found.")
-
     print(f"   ✅ {len(files_df)} images linked.")
 
     # ---------------- STRATIFIED GROUP SPLIT ----------------
-    print("\n🛡️ Stratified Group Split (patient-level + class-balanced)...")
-
+    print("\n🛡️ Stratified Group Split (patient-level)...")
     train_df, val_df = stratified_group_split(
         files_df,
         val_split=val_split,
         seed=SEED
     )
 
-    overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
-
-    print(f"   📊 Train patients: {len(set(train_df['patient_id']))}")
-    print(f"   📊 Val patients  : {len(set(val_df['patient_id']))}")
-    print(f"   🚨 Leakage check : {len(overlap)} (must be 0)")
-
-    # ---------------- AUGMENTATION ----------------
+    # ---------------- NUCLEAR AUGMENTATION ----------------
+    # 1. RandomResizedCrop: Forces model to learn features, not brain position.
+    # 2. AdjustSharpness: Simulates varied MRI scan qualities.
+    # 3. Solarize: Adversarial noise to prevent pixel memorization.
+    
     train_transform = transforms.Compose([
-        transforms.Resize((260, 260)),
-        transforms.RandomRotation(20),
+        transforms.RandomResizedCrop(260, scale=(0.8, 1.0)), 
         transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(p=0.1),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
-        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
-        transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(brightness=0.25, contrast=0.25),
+        transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
+        transforms.RandomSolarize(threshold=190, p=0.1),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.15, scale=(0.02, 0.1))
+        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15))
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((260, 260)), # Matched to B2 architecture
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225])
@@ -192,12 +312,13 @@ def prepare_data(csv_path: str, images_dir: str,
     train_dataset = OASISDataset(train_df, transform=train_transform)
     val_dataset = OASISDataset(val_df, transform=val_transform)
 
-    # ---------------- SAMPLER ----------------
+    # ---------------- SAMPLER BOOST ----------------
     print("\n⚖️ Building WeightedRandomSampler...")
-
     class_sample_count = np.bincount(train_df['label'])
+    
+    # We use 1/count but could also try 1/sqrt(count) if the model gets too 
+    # biased toward ModerateDemented. For now, let's stick to full inverse.
     class_weights = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
-
     samples_weights = class_weights[train_df['label'].values]
 
     sampler = WeightedRandomSampler(
@@ -211,7 +332,7 @@ def prepare_data(csv_path: str, images_dir: str,
         train_dataset,
         batch_size=batch_size,
         sampler=sampler,
-        num_workers=2,
+        num_workers=4, # Increased for faster preprocessing
         pin_memory=True
     )
 
@@ -219,14 +340,12 @@ def prepare_data(csv_path: str, images_dir: str,
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=4,
         pin_memory=True
     )
 
-    print("🚀 Pipeline ready.")
-
+    print("🚀 Pipeline ready. Resolution: 260x260. Strategy: Adversarial.")
     return train_loader, val_loader, CLASS_NAMES
-
 
 # ==========================================================
 # 5. VISUALIZATION UTILITIES
