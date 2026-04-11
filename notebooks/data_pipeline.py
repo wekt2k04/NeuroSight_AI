@@ -5,8 +5,8 @@ NeuroSight AI - Data Pipeline Module (Engineered Version)
 Ce module centralise la logique avancée de préparation des données :
 - Reproductibilité (Seeds fixes)
 - Imputation MICE (IterativeImputer) pour les données cliniques manquantes
-- Zéro Data Leakage (GroupShuffleSplit par ID Patient)
-- Équilibrage robuste (WeightedRandomSampler)
+- Zéro Data Leakage (StratifiedGroupKFold par ID Patient)
+- Équilibrage robuste des classes rares (WeightedRandomSampler)
 - Sortie Pure CNN : (Image, Label) pour compatibilité directe avec EfficientNet.
 """
 
@@ -26,7 +26,7 @@ from torchvision import transforms
 # Activation expérimentale requise par scikit-learn pour IterativeImputer
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import StratifiedGroupKFold # <-- CORRECTION MAJEURE ICI
 
 # ==========================================================
 # 1. CONFIGURATION & REPRODUCTIBILITÉ
@@ -75,7 +75,7 @@ class OASISDataset(Dataset):
 # ==========================================================
 def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
     """
-    Prépare les DataLoaders avec Imputation MICE et GroupSplit.
+    Prépare les DataLoaders avec Imputation MICE et StratifiedGroupKFold.
     Signature adaptée pour Leila : renvoie (train_loader, val_loader, class_names).
     """
     print("📖 1. Chargement des données cliniques et Imputation MICE...")
@@ -85,8 +85,6 @@ def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split
         df_clinical = pd.read_excel(csv_path)
         
     # --- FEATURE ENGINEERING : Imputation MICE ---
-    # On utilise IterativeImputer pour deviner les valeurs manquantes (ex: MMSE)
-    # en se basant sur les autres caractéristiques du patient (Âge, SES, Educ).
     cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
     imputer = IterativeImputer(random_state=SEED, max_iter=10)
     df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
@@ -106,8 +104,8 @@ def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split
                         if pd.notna(cdr_score) and cdr_score in CDR_TO_CLASS:
                             valid_files.append({
                                 'path': os.path.join(root, file),
-                                'patient_id': patient_id,
-                                'label': CDR_TO_CLASS[cdr_score]
+                                'patient_id': patient_id, # L'ID Patient servira de Groupe
+                                'label': CDR_TO_CLASS[cdr_score] # Le Label servira pour la Stratification
                             })
                             
     files_df = pd.DataFrame(valid_files)
@@ -115,19 +113,34 @@ def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split
         raise ValueError("❌ Aucune image valide trouvée. Vérifiez les chemins.")
     print(f"   ✅ {len(files_df)} images valides associées avec succès.")
 
-    # --- DATA LEAKAGE PREVENTION : Group Shuffle Split ---
-    print(f"\n🛡️ 3. Application du Group Split par ID Patient (Validation: {val_split*100}%)...")
-    gss = GroupShuffleSplit(n_splits=1, test_size=val_split, random_state=SEED)
-    train_idx, val_idx = next(gss.split(files_df, groups=files_df['patient_id']))
+    # --- DATA LEAKAGE PREVENTION & ÉQUILIBRAGE RARE : Stratified Group Split ---
+    print(f"\n🛡️ 3. Application du Stratified Group Split (Validation: {val_split*100}%)...")
+    
+    # On calcule le nombre de splits nécessaires pour atteindre le val_split souhaité (ex: 0.2 -> 5 splits)
+    n_splits = max(2, int(1.0 / val_split)) 
+    
+    # Le StratifiedGroupKFold force les classes rares (comme Moderate) à être réparties dans les deux sets,
+    # TOUT en empêchant qu'un patient se retrouve à la fois dans le Train et le Val.
+    sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
+    
+    # On génère la séparation en donnant : X (les données), y (les labels pour stratifier), groups (les patients)
+    train_idx, val_idx = next(sgkf.split(X=files_df, y=files_df['label'], groups=files_df['patient_id']))
     
     train_df = files_df.iloc[train_idx].reset_index(drop=True)
     val_df = files_df.iloc[val_idx].reset_index(drop=True)
     
-    # Audit visuel dans la console
+    # Audit visuel interne
     overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
     print(f"   📊 Patients uniques Train : {len(set(train_df['patient_id']))}")
     print(f"   📊 Patients uniques Val   : {len(set(val_df['patient_id']))}")
     print(f"   🚨 Chevauchement (Leakage): {len(overlap)} patients (Doit être 0).")
+    
+    # Vérification d'assurance sur les classes rares
+    val_classes = val_df['label'].unique()
+    if 3 not in val_classes:
+        print("   ⚠️ ATTENTION : La classe 'Moderate' n'a pas pu être placée dans la validation (trop peu de patients).")
+    else:
+        print("   ✅ EXCELLENT : La classe 'Moderate' est bien représentée dans l'examen de validation !")
 
     # --- TRANSFORMATIONS ---
     train_transform = transforms.Compose([
@@ -148,8 +161,8 @@ def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split
     train_dataset = OASISDataset(train_df, transform=train_transform)
     val_dataset = OASISDataset(val_df, transform=val_transform)
 
-    # --- ÉQUILIBRAGE DES CLASSES ---
-    print("\n⚖️ 4. Calcul des poids pour l'équilibrage des classes (WeightedRandomSampler)...")
+    # --- ÉQUILIBRAGE DES BATCHS ---
+    print("\n⚖️ 4. Calcul des poids pour l'équilibrage des classes dans les batchs...")
     class_sample_count = np.bincount(train_df['label'])
     weights = 1. / torch.tensor(class_sample_count, dtype=torch.float)
     samples_weights = weights[train_df['label'].values]
@@ -159,7 +172,7 @@ def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     
-    print("🚀 Pipeline prêt ! Les DataLoaders vont générer des lots (Images, Labels).")
+    print("🚀 Pipeline prêt ! Les DataLoaders vont générer des lots sécurisés et stratifiés.")
     return train_loader, val_loader, CLASS_NAMES
 
 # ==========================================================
