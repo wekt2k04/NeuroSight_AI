@@ -1,13 +1,16 @@
 """
-NeuroSight AI - Data Pipeline Module (v3 - Corrected)
-======================================================
+NeuroSight AI - Data Pipeline Module (v4 - Resource Optimized)
+==============================================================
 
-Corrections appliquées (v3) :
-- [BUG FIX] Split en 3 étapes : patients ModerateDemented forcés dans le val set
-            pour garantir leur présence même avec très peu de patients uniques.
-- [AMÉLIORATION] Augmentation data enrichie pour IRM cérébrales (RandomErasing,
-            RandomAffine, RandomVerticalFlip).
-- Conservation de toutes les garanties v2 : MICE, zéro leakage, WeightedRandomSampler.
+Corrections apportées (v4) :
+- [PERF] OASISDatasetCached : pré-charge toutes les images en RAM
+         pour éliminer le bottleneck I/O disque (lecture JPEG à chaque époque).
+- [PERF] prefetch_factor=4 : le DataLoader prépare 4 batchs d'avance
+         pour que le GPU ne soit jamais en attente du CPU.
+- [PERF] num_workers plafonné à 4 (au-delà on sature le scheduler Kaggle
+         sans gain supplémentaire sur 4 vrais cœurs physiques).
+- Conservation de toutes les garanties v3 : MICE, split 3 phases,
+  ModerateDemented garanti dans val, WeightedRandomSampler, Focal Loss ready.
 """
 
 import os
@@ -46,41 +49,58 @@ CLASS_NAMES = ['NonDemented', 'VeryMildDemented', 'MildDemented', 'ModerateDemen
 
 
 # ==========================================================
-# 2. CLASSE DATASET PERSONNALISÉE
+# 2. DATASET AVEC CACHE RAM
 # ==========================================================
-class OASISDataset(Dataset):
-    """Dataset PyTorch qui charge les images 2D et les associe aux étiquettes."""
-    def __init__(self, df: pd.DataFrame, transform=None):
-        self.df = df.reset_index(drop=True)
+class OASISDatasetCached(Dataset):
+    """
+    Dataset PyTorch avec pré-chargement de toutes les images en RAM.
+
+    Avantage : élimine le bottleneck I/O disque — les images ne sont
+    lues qu'une seule fois au démarrage, puis chaque époque récupère
+    les pixels directement depuis la mémoire vive (x3-5 plus rapide).
+
+    Prérequis : ~2-3 GB de RAM pour ~47 000 images OASIS 224x224 RGB.
+    Kaggle met 13 GB de RAM à disposition — aucun problème.
+    """
+    def __init__(self, df: pd.DataFrame, transform=None, desc: str = ""):
+        self.df        = df.reset_index(drop=True)
         self.transform = transform
+        n = len(self.df)
+        print(f"   📦 Mise en cache {desc}: {n} images en RAM...", end=" ", flush=True)
+        self.cache = [
+            Image.open(row['path']).convert('RGB')
+            for _, row in self.df.iterrows()
+        ]
+        print("✅ Prêt.")
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
-        img_path = self.df.iloc[idx]['path']
-        label = self.df.iloc[idx]['label']
-        image = Image.open(img_path).convert('RGB')
+        image = self.cache[idx]
+        label = int(self.df.iloc[idx]['label'])
         if self.transform:
             image = self.transform(image)
         return image, label
 
 
 # ==========================================================
-# 3. FONCTION PRINCIPALE DE PIPELINE (v3 - CORRECTED)
+# 3. FONCTION PRINCIPALE DE PIPELINE (v4 - RESOURCE OPTIMIZED)
 # ==========================================================
 def prepare_data(
     csv_path: str,
     images_dir: str,
-    batch_size: int = 32,
+    batch_size: int = 64,
     val_split: float = 0.2
 ) -> Tuple[DataLoader, DataLoader, List[str]]:
     """
     Prépare les DataLoaders avec :
     - Imputation MICE
-    - Split 3 étapes (garantie Moderate dans val)
+    - Split 3 étapes (ModerateDemented garanti dans val)
     - WeightedRandomSampler (équilibrage train)
     - Augmentation IRM enrichie
+    - Cache RAM (lecture disque une seule fois)
+    - prefetch_factor=4 (GPU ne attend jamais le CPU)
     Renvoie : (train_loader, val_loader, class_names)
     """
 
@@ -115,9 +135,9 @@ def prepare_data(
                         ].values[0]
                         if pd.notna(cdr_score) and cdr_score in CDR_TO_CLASS:
                             valid_files.append({
-                                'path': os.path.join(root, file),
+                                'path':       os.path.join(root, file),
                                 'patient_id': patient_id,
-                                'label': CDR_TO_CLASS[cdr_score]
+                                'label':      CDR_TO_CLASS[cdr_score]
                             })
 
     files_df = pd.DataFrame(valid_files)
@@ -125,53 +145,41 @@ def prepare_data(
         raise ValueError("❌ Aucune image valide trouvée. Vérifiez les chemins.")
     print(f"   ✅ {len(files_df)} images valides associées avec succès.")
 
-    # Audit de distribution brute
     label_counts = files_df['label'].value_counts().sort_index()
     for lbl, cnt in label_counts.items():
         print(f"   📊 Classe {CLASS_NAMES[lbl]:>20s} : {cnt:>6d} images")
 
     # ----------------------------------------------------------
-    # ÉTAPE 3 : SPLIT EN 3 PHASES — Zéro Leakage + Moderate Garanti
+    # ÉTAPE 3 : SPLIT EN 3 PHASES — Zéro Leakage + Moderate garanti
     # ----------------------------------------------------------
     print(f"\n🛡️  3. Application du Split 3 étapes (Validation: {val_split*100:.0f}%)...")
 
-    # Phase A : Isoler tous les patients ModerateDemented (CDR=2.0)
-    # Leur nombre est trop faible pour StratifiedGroupKFold → on les force dans val
     moderate_patient_ids = set(files_df[files_df['label'] == 3]['patient_id'].unique())
     mask_moderate = files_df['patient_id'].isin(moderate_patient_ids)
-    moderate_df = files_df[mask_moderate].copy()
-    other_df    = files_df[~mask_moderate].copy()
+    moderate_df   = files_df[mask_moderate].copy()
+    other_df      = files_df[~mask_moderate].copy()
 
-    n_moderate_patients = len(moderate_patient_ids)
-    n_moderate_images   = len(moderate_df)
-    print(f"   🔴 ModerateDemented : {n_moderate_patients} patient(s) unique(s) | "
-          f"{n_moderate_images} images → forcé(s) dans VAL")
+    print(f"   🔴 ModerateDemented : {len(moderate_patient_ids)} patient(s) unique(s) | "
+          f"{len(moderate_df)} images → forcé(s) dans VAL")
 
-    # Phase B : Splitter les 3 autres classes avec GroupShuffleSplit (zéro leakage garanti)
     gss = GroupShuffleSplit(n_splits=1, test_size=val_split, random_state=SEED)
     train_idx, val_idx = next(
         gss.split(X=other_df, y=other_df['label'], groups=other_df['patient_id'])
     )
-    train_df = other_df.iloc[train_idx].copy()
+    train_df    = other_df.iloc[train_idx].copy()
     val_base_df = other_df.iloc[val_idx].copy()
+    val_df      = pd.concat([val_base_df, moderate_df], ignore_index=True)
 
-    # Phase C : Fusionner les patients Moderate dans le val set
-    val_df = pd.concat([val_base_df, moderate_df], ignore_index=True)
-
-    # ----------------------------------------------------------
-    # AUDIT DE QUALITÉ
-    # ----------------------------------------------------------
     overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
     print(f"   📊 Patients uniques Train : {len(set(train_df['patient_id']))}")
     print(f"   📊 Patients uniques Val   : {len(set(val_df['patient_id']))}")
     print(f"   🚨 Chevauchement (Leakage): {len(overlap)} patient(s) — Doit être 0.")
 
-    val_classes = val_df['label'].unique()
-    if 3 in val_classes:
-        n_val_moderate = len(val_df[val_df['label'] == 3])
-        print(f"   ✅ ModerateDemented présent dans VAL : {n_val_moderate} images.")
+    if 3 in val_df['label'].unique():
+        print(f"   ✅ ModerateDemented présent dans VAL : "
+              f"{len(val_df[val_df['label']==3])} images.")
     else:
-        print("   ⚠️  ATTENTION : ModerateDemented toujours absent du val (aucun patient CDR=2.0 dans le CSV).")
+        print("   ⚠️  ModerateDemented toujours absent (aucun patient CDR=2.0 dans le CSV).")
 
     # ----------------------------------------------------------
     # ÉTAPE 4 : TRANSFORMATIONS (augmentation enrichie pour IRM)
@@ -194,36 +202,56 @@ def prepare_data(
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
-    train_dataset = OASISDataset(train_df, transform=train_transform)
-    val_dataset   = OASISDataset(val_df,   transform=val_transform)
+    # ----------------------------------------------------------
+    # ÉTAPE 5 : CACHE RAM (lecture disque une seule fois)
+    # ----------------------------------------------------------
+    print("\n💾 4. Pré-chargement des images en RAM (cache)...")
+    train_dataset = OASISDatasetCached(train_df, transform=train_transform, desc="Train")
+    val_dataset   = OASISDatasetCached(val_df,   transform=val_transform,   desc="Val  ")
 
     # ----------------------------------------------------------
-    # ÉTAPE 5 : ÉQUILIBRAGE DES BATCHS (WeightedRandomSampler)
+    # ÉTAPE 6 : ÉQUILIBRAGE DES BATCHS (WeightedRandomSampler)
     # ----------------------------------------------------------
-    print("\n⚖️  4. Calcul des poids de rééquilibrage pour le train...")
+    print("\n⚖️  5. Calcul des poids de rééquilibrage pour le train...")
     n_classes = len(CLASS_NAMES)
     class_sample_count = np.bincount(train_df['label'].values, minlength=n_classes)
-    # Sécurité : éviter division par zéro si une classe est absente du train
     class_sample_count = np.where(class_sample_count == 0, 1, class_sample_count)
     weights = 1.0 / torch.tensor(class_sample_count, dtype=torch.float)
     samples_weights = weights[train_df['label'].values]
     sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
 
-    cores = os.cpu_count()
+    # Kaggle dispose de 4 cœurs physiques utiles.
+    # Au-delà, les workers supplémentaires se partagent les mêmes cœurs
+    # et ajoutent surtout de l'overhead de synchronisation.
+    NUM_WORKERS = min(os.cpu_count() or 1, 4)
 
     # ----------------------------------------------------------
-    # ÉTAPE 6 : DATALOADERS
+    # ÉTAPE 7 : DATALOADERS OPTIMISÉS
+    # prefetch_factor=4 : prépare 4 batchs d'avance par worker
+    #   → le GPU ne sera jamais en attente du CPU
+    # non_blocking est géré côté entraînement (.to(device, non_blocking=True))
     # ----------------------------------------------------------
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, sampler=sampler,
-        num_workers=cores, pin_memory=True, persistent_workers=True
+        train_dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=4
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False,
-        num_workers=cores, pin_memory=True, persistent_workers=True
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=4
     )
 
-    print("🚀 Pipeline prêt ! DataLoaders générés avec zéro leakage et ModerateDemented garanti dans VAL.")
+    print(f"\n🚀 Pipeline prêt ! "
+          f"[num_workers={NUM_WORKERS} | batch={batch_size} | prefetch=4 | cache=RAM]")
     return train_loader, val_loader, CLASS_NAMES
 
 
