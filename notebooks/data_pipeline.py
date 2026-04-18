@@ -168,9 +168,12 @@ def prepare_data(csv_path: str, images_dir: str, batch_size: int = 32, val_split
     samples_weights = weights[train_df['label'].values]
     sampler = WeightedRandomSampler(samples_weights, len(samples_weights))
 
+    # On utilise tous les coeurs disponibles du CPU de Kaggle
+    cores = os.cpu_count()
+
     # --- DATALOADERS ---
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=cores, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=cores, pin_memory=True)
     
     print("🚀 Pipeline prêt ! Les DataLoaders vont générer des lots sécurisés et stratifiés.")
     return train_loader, val_loader, CLASS_NAMES
