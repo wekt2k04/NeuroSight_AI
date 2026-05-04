@@ -1,0 +1,18 @@
+# Python Dependencies for NeuroSight AI
+# Install with: pip install -r requirements.txt
+
+# Core Inference Runtime
+onnxruntime>=1.16.0
+# Optional GPU runtime (install this instead of onnxruntime if needed)
+# onnxruntime-gpu>=1.16.0
+
+# Image Processing
+Pillow>=8.0
+opencv-python>=4.5.0
+
+# Numerical Computing
+numpy>=1.19.0
+scipy>=1.5.0
+
+# Optional: For visualization/debugging
+matplotlib>=3.3.0

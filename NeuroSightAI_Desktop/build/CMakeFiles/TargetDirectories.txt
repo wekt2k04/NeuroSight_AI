@@ -1,0 +1,8 @@
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/NeuroSightAI.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/edit_cache.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/rebuild_cache.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/list_install_components.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/install.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/install/local.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/NeuroSightAI_autogen_timestamp_deps.dir
+C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/NeuroSightAI_autogen.dir

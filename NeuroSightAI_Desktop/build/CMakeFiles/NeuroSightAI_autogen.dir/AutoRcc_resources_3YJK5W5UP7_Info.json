@@ -1,0 +1,26 @@
+{
+	"BUILD_DIR" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/NeuroSightAI_autogen",
+	"CMAKE_BINARY_DIR" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build",
+	"CMAKE_CURRENT_BINARY_DIR" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build",
+	"CMAKE_CURRENT_SOURCE_DIR" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop",
+	"CMAKE_SOURCE_DIR" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop",
+	"CROSS_CONFIG" : false,
+	"GENERATOR" : "NMake Makefiles",
+	"INCLUDE_DIR" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/NeuroSightAI_autogen/include",
+	"INPUTS" : 
+	[
+		"C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/resources/style.qss",
+		"C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/resources/icon.png"
+	],
+	"LOCK_FILE" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/NeuroSightAI_autogen.dir/AutoRcc_resources_3YJK5W5UP7_Lock.lock",
+	"MULTI_CONFIG" : false,
+	"OPTIONS" : [ "--no-zstd", "-name", "resources" ],
+	"OUTPUT_CHECKSUM" : "3YJK5W5UP7",
+	"OUTPUT_NAME" : "qrc_resources.cpp",
+	"RCC_EXECUTABLE" : "C:/Qt/6.10.2/mingw_64/bin/rcc.exe",
+	"RCC_LIST_OPTIONS" : [ "--list" ],
+	"SETTINGS_FILE" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/build/CMakeFiles/NeuroSightAI_autogen.dir/AutoRcc_resources_3YJK5W5UP7_Used.txt",
+	"SOURCE" : "C:/Users/kheza/Downloads/Neurosight_AI/NeuroSightAI_Desktop/resources/resources.qrc",
+	"USE_BETTER_GRAPH" : true,
+	"VERBOSITY" : 0
+}

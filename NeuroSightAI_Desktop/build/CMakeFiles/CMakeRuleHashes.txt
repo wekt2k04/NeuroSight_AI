@@ -1,0 +1,4 @@
+# Hashes of file build rules.
+4545d6c6e56297fe58c14917647cb782 CMakeFiles/NeuroSightAI_autogen
+40c2bd9bb2f47019c32b82c5b781d6ca NeuroSightAI_autogen/3YJK5W5UP7/qrc_resources.cpp
+4ba0aed47df22303f1d38d3930f7cb28 NeuroSightAI_autogen/timestamp
