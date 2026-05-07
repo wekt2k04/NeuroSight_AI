@@ -1,0 +1,58 @@
+/* NeuroSight AI Stylesheet */
+
+QMainWindow {
+    background-color: #f0f0f0;
+}
+
+QFrame {
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+QLabel {
+    color: #333;
+}
+
+QPushButton {
+    background-color: #4a9eff;
+    color: white;
+    font-weight: bold;
+    border: none;
+    border-radius: 5px;
+    padding: 8px;
+}
+
+QPushButton:hover {
+    background-color: #2e7fd9;
+}
+
+QPushButton:pressed {
+    background-color: #1e5fa8;
+}
+
+QGroupBox {
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    margin-top: 10px;
+    padding-top: 10px;
+    font-weight: bold;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 3px;
+}
+
+QProgressBar {
+    border: 1px solid #bdc3c7;
+    border-radius: 5px;
+    text-align: center;
+    background-color: #ecf0f1;
+}
+
+QProgressBar::chunk {
+    background-color: #3498db;
+    border-radius: 3px;
+}
