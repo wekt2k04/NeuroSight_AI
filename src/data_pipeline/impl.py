@@ -1,18 +1,7 @@
 """
-NeuroSight AI - Data Pipeline Module (v4 - Resource Optimized)
-==============================================================
-
-Corrections apportées (v4) :
-- [PERF] OASISDatasetCached : pré-charge toutes les images en RAM
-         pour éliminer le bottleneck I/O disque (lecture JPEG à chaque époque).
-- [PERF] prefetch_factor=4 : le DataLoader prépare 4 batchs d'avance
-         pour que le GPU ne soit jamais en attente du CPU.
-- [PERF] num_workers plafonné à 4 (au-delà on sature le scheduler Kaggle
-         sans gain supplémentaire sur 4 vrais cœurs physiques).
-- Conservation de toutes les garanties v3 : MICE, split 3 phases,
-  ModerateDemented garanti dans val, WeightedRandomSampler, Focal Loss ready.
+Extracted implementation of the data pipeline from notebooks/data_pipeline.py
+Refactored into a reusable module for production use.
 """
-
 import os
 import re
 import torch
@@ -52,16 +41,6 @@ CLASS_NAMES = ['NonDemented', 'VeryMildDemented', 'MildDemented', 'ModerateDemen
 # 2. DATASET AVEC CACHE RAM
 # ==========================================================
 class OASISDatasetCached(Dataset):
-    """
-    Dataset PyTorch avec pré-chargement de toutes les images en RAM.
-
-    Avantage : élimine le bottleneck I/O disque — les images ne sont
-    lues qu'une seule fois au démarrage, puis chaque époque récupère
-    les pixels directement depuis la mémoire vive (x3-5 plus rapide).
-
-    Prérequis : ~2-3 GB de RAM pour ~47 000 images OASIS 224x224 RGB.
-    Kaggle met 13 GB de RAM à disposition — aucun problème.
-    """
     def __init__(self, df: pd.DataFrame, transform=None, desc: str = ""):
         self.df        = df.reset_index(drop=True)
         self.transform = transform
@@ -220,17 +199,8 @@ def prepare_data(
     samples_weights = weights[train_df['label'].values]
     sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
 
-    # Kaggle dispose de 4 cœurs physiques utiles.
-    # Au-delà, les workers supplémentaires se partagent les mêmes cœurs
-    # et ajoutent surtout de l'overhead de synchronisation.
     NUM_WORKERS = min(os.cpu_count() or 1, 4)
 
-    # ----------------------------------------------------------
-    # ÉTAPE 7 : DATALOADERS OPTIMISÉS
-    # prefetch_factor=4 : prépare 4 batchs d'avance par worker
-    #   → le GPU ne sera jamais en attente du CPU
-    # non_blocking est géré côté entraînement (.to(device, non_blocking=True))
-    # ----------------------------------------------------------
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -259,7 +229,6 @@ def prepare_data(
 # 4. FONCTIONS UTILITAIRES (EDA & AUDIT)
 # ==========================================================
 def plot_class_distribution(dataloader: DataLoader, classes: List[str]) -> None:
-    """Affiche la distribution des classes dans un DataLoader."""
     all_labels = []
     for _, labels in dataloader:
         all_labels.extend(labels.numpy())
@@ -279,7 +248,6 @@ def plot_class_distribution(dataloader: DataLoader, classes: List[str]) -> None:
 
 
 def show_sample_batch(dataloader: DataLoader, classes: List[str], num_samples: int = 8) -> None:
-    """Récupère un lot, inverse la normalisation et l'affiche."""
     images, labels = next(iter(dataloader))
 
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
