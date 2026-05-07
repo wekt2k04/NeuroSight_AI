@@ -7,6 +7,7 @@ Fixes applied:
 - Guarantees all classes appear in test set
 - Handles small patient counts gracefully
 - Two-stage sampling: oversample training set, keep val/test realistic
+- Added class weights support
 """
 
 import os
@@ -69,7 +70,7 @@ class OASISDataset(Dataset):
 
 
 # ==========================================================
-# 3. STRATIFIED GROUP SPLIT (FIXED - GUARANTEES ALL CLASSES IN TEST)
+# 3. STRATIFIED GROUP SPLIT (GUARANTEES ALL CLASSES IN TEST)
 # ==========================================================
 def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
     """
@@ -94,32 +95,24 @@ def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
         random.shuffle(patients)
         n_total = len(patients)
         
-        # If only 1 patient in class, put in training (not val/test)
         if n_total == 1:
             train_patients.update(patients)
             continue
-        
-        # If only 2 patients, put 1 in train, 1 in val
-        if n_total == 2:
+        elif n_total == 2:
             train_patients.update([patients[0]])
             val_patients.update([patients[1]])
             continue
-        
-        # If only 3 patients, put 1 in train, 1 in val, 1 in test
-        if n_total == 3:
+        elif n_total == 3:
             train_patients.update([patients[0]])
             val_patients.update([patients[1]])
             test_patients.update([patients[2]])
             continue
         
-        # Normal case: enough patients for proper split
         n_val = max(1, int(n_total * val_split))
         n_test = max(1, int(n_total * test_split))
         n_train = n_total - n_val - n_test
         
-        # Ensure training has at least 1 sample
         if n_train < 1:
-            # Take 1 from val if possible
             if n_val > 1:
                 n_val -= 1
                 n_train = 1
@@ -127,7 +120,6 @@ def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
                 n_test -= 1
                 n_train = 1
         
-        # Ensure test has at least 1 sample for rare classes
         if n_test < 1 and n_total > 2:
             n_test = 1
             n_train = n_total - n_val - n_test
@@ -153,10 +145,7 @@ def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
 # 4. ENSURE TEST SET HAS ALL CLASSES
 # ==========================================================
 def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class=50):
-    """
-    Ensures test set has at least target_test_per_class samples per class.
-    Borrows from train or val if needed.
-    """
+    """Ensures test set has at least target_test_per_class samples per class."""
     original_test_counts = test_df['label'].value_counts().sort_index()
     print(f"\n   Original test counts: {dict(original_test_counts)}")
     
@@ -164,10 +153,8 @@ def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class
         current_test_count = len(test_df[test_df['label'] == class_label])
         
         if current_test_count < target_test_per_class:
-            # Need more samples in test set
             needed = target_test_per_class - current_test_count
             
-            # Borrow from training set first
             train_class_df = train_df[train_df['label'] == class_label]
             if len(train_class_df) >= needed:
                 moved = train_class_df.sample(n=needed, random_state=SEED)
@@ -175,7 +162,6 @@ def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class
                 train_df = train_df.drop(moved.index).reset_index(drop=True)
                 print(f"   Moved {needed} samples of class {class_label} from train to test")
             else:
-                # Borrow from validation set
                 val_class_df = val_df[val_df['label'] == class_label]
                 if len(val_class_df) >= needed:
                     moved = val_class_df.sample(n=needed, random_state=SEED)
@@ -183,7 +169,6 @@ def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class
                     val_df = val_df.drop(moved.index).reset_index(drop=True)
                     print(f"   Moved {needed} samples of class {class_label} from val to test")
                 else:
-                    # Take what we can from both
                     moved_train = train_class_df.sample(n=min(len(train_class_df), needed), random_state=SEED)
                     test_df = pd.concat([test_df, moved_train], ignore_index=True)
                     train_df = train_df.drop(moved_train.index).reset_index(drop=True)
@@ -202,25 +187,43 @@ def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class
 
 
 # ==========================================================
-# 5. MAIN PIPELINE
+# 5. CLASS WEIGHTS FOR LOSS FUNCTION
+# ==========================================================
+def get_class_weights(train_df, method='balanced'):
+    """
+    Calculate class weights for loss function.
+    method: 'balanced' (inverse frequency) or 'focus' (higher weights for Mild/Moderate)
+    """
+    class_counts = train_df['label'].value_counts().sort_index().values
+    
+    if method == 'balanced':
+        weights = 1.0 / class_counts
+        weights = weights / weights.sum() * len(class_counts)
+    elif method == 'focus':
+        # Higher weights for Mild (2) and Moderate (3)
+        base_weights = 1.0 / class_counts
+        focus_weights = base_weights.copy()
+        focus_weights[2] *= 2.5  # Mild gets 2.5x weight
+        focus_weights[3] *= 2.0  # Moderate gets 2x weight
+        weights = focus_weights / focus_weights.sum() * len(class_counts)
+    else:
+        weights = np.ones(len(class_counts))
+    
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+# ==========================================================
+# 6. MAIN PIPELINE
 # ==========================================================
 def prepare_data(csv_path: str, images_dir: str,
                  batch_size: int = 32,
                  val_split: float = 0.15,
                  test_split: float = 0.15,
                  target_train_per_class: int = 5000,
-                 target_test_per_class: int = 50) -> Tuple[DataLoader, DataLoader, DataLoader, List[str]]:
+                 target_test_per_class: int = 50,
+                 class_weight_method: str = 'focus') -> Tuple[DataLoader, DataLoader, DataLoader, torch.Tensor, List[str]]:
     """
-    Returns train_loader, val_loader, test_loader, class_names
-    
-    Args:
-        csv_path: Path to clinical data CSV/Excel file
-        images_dir: Path to directory containing images
-        batch_size: Batch size for DataLoaders
-        val_split: Fraction of patients to use for validation
-        test_split: Fraction of patients to use for test
-        target_train_per_class: Target samples per class in training (after balancing)
-        target_test_per_class: Minimum samples per class in test set
+    Returns train_loader, val_loader, test_loader, class_weights, class_names
     """
     print("📖 Loading clinical data + MICE imputation...")
 
@@ -229,13 +232,11 @@ def prepare_data(csv_path: str, images_dir: str,
     except Exception:
         df_clinical = pd.read_excel(csv_path)
 
-    # MICE Imputation
     cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
     imputer = IterativeImputer(random_state=SEED, max_iter=10)
     df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
     print("   ✅ MICE imputation done.")
 
-    # Image Linking
     print(f"🔍 Scanning images: {images_dir}")
     valid_files = []
 
@@ -262,7 +263,6 @@ def prepare_data(csv_path: str, images_dir: str,
         raise ValueError("❌ No valid images found.")
     print(f"   ✅ {len(files_df)} images linked.")
 
-    # STRATIFIED 3-WAY SPLIT (train/val/test)
     print("\n🛡️ Stratified Group Split (patient-level, class-balanced)...")
     train_df, val_df, test_df = stratified_group_split(
         files_df,
@@ -271,19 +271,16 @@ def prepare_data(csv_path: str, images_dir: str,
         seed=SEED
     )
     
-    # Print split statistics
     print(f"\n📊 INITIAL SPLIT STATISTICS:")
     for name, df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
         counts = df['label'].value_counts().sort_index()
         print(f"   {name}: {dict(counts)}")
     
-    # Ensure test set has all classes
     print(f"\n🔄 Ensuring test set has all classes...")
     train_df, val_df, test_df = ensure_test_has_all_classes(
         train_df, val_df, test_df, target_test_per_class=target_test_per_class
     )
     
-    # ========== STAGE 1: TRAIN SET BALANCING (OVERSAMPLING) ==========
     print(f"\n⚖️ STAGE 1: Balancing TRAIN set to {target_train_per_class} samples per class...")
     
     balanced_train_dfs = []
@@ -293,16 +290,13 @@ def prepare_data(csv_path: str, images_dir: str,
         
         if n_current == 0:
             print(f"   ⚠️ WARNING: Class {class_label} has 0 samples in training!")
-            # This shouldn't happen with proper splitting
             continue
         
         if n_current < target_train_per_class:
-            # Oversample with replacement
             indices = np.random.choice(class_df.index, size=target_train_per_class, replace=True)
             balanced_train_dfs.append(class_df.loc[indices])
             print(f"   Class {class_label}: oversampled from {n_current} to {target_train_per_class}")
         elif n_current > target_train_per_class:
-            # Undersample
             balanced_train_dfs.append(class_df.sample(n=target_train_per_class, random_state=SEED))
             print(f"   Class {class_label}: undersampled from {n_current} to {target_train_per_class}")
         else:
@@ -312,24 +306,23 @@ def prepare_data(csv_path: str, images_dir: str,
     train_df_balanced = pd.concat(balanced_train_dfs, ignore_index=True)
     print(f"\n   ✅ Train set balanced: {dict(train_df_balanced['label'].value_counts().sort_index())}")
     
-    # ========== STAGE 2: Keep VAL and TEST as is ==========
-    # (no oversampling for realistic evaluation)
     for name, df in [("Val", val_df), ("Test", test_df)]:
         counts = df['label'].value_counts().sort_index()
         print(f"   {name} set (natural distribution): {dict(counts)}")
     
-    # ========== AUGMENTATION ==========
+    # ========== ENHANCED AUGMENTATION ==========
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(260, scale=(0.7, 1.0)),
+        transforms.RandomResizedCrop(260, scale=(0.6, 1.0)),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+        transforms.RandomRotation(25),
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3),
         transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
+        transforms.RandomGrayscale(p=0.1),
         transforms.RandomSolarize(threshold=190, p=0.1),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15))
+        transforms.RandomErasing(p=0.25, scale=(0.02, 0.2))
     ])
 
     val_transform = transforms.Compose([
@@ -343,18 +336,21 @@ def prepare_data(csv_path: str, images_dir: str,
     val_dataset = OASISDataset(val_df, transform=val_transform)
     test_dataset = OASISDataset(test_df, transform=val_transform)
 
-    # ========== SAMPLER (for training only) ==========
+    # ========== SAMPLER ==========
     class_sample_count = np.bincount(train_df_balanced['label'])
-    class_weights = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
-    samples_weights = class_weights[train_df_balanced['label'].values]
+    class_weights_sampler = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
+    samples_weights = class_weights_sampler[train_df_balanced['label'].values]
     
     sampler = WeightedRandomSampler(
         weights=samples_weights,
         num_samples=len(samples_weights),
         replacement=True
     )
+    
+    # ========== CLASS WEIGHTS FOR LOSS ==========
+    class_weights = get_class_weights(train_df_balanced, method=class_weight_method)
+    print(f"\n⚖️ Class weights for loss: {class_weights.numpy()}")
 
-    # DataLoaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -384,11 +380,11 @@ def prepare_data(csv_path: str, images_dir: str,
     print(f"   Val batches: {len(val_loader)}")
     print(f"   Test batches: {len(test_loader)}")
     
-    return train_loader, val_loader, test_loader, CLASS_NAMES
+    return train_loader, val_loader, test_loader, class_weights, CLASS_NAMES
 
 
 # ==========================================================
-# 6. VISUALIZATION UTILITIES
+# 7. VISUALIZATION UTILITIES
 # ==========================================================
 def plot_class_distribution(dataloader: DataLoader, classes: List[str]) -> None:
     labels = []
