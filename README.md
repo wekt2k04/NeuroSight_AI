@@ -1,479 +1,152 @@
-# 🧠 NeuroSight AI
+# NeuroSight AI
 
-**Intelligent Early Detection System for Alzheimer's Disease using Deep Learning & Medical Imaging**
+NeuroSight AI is a local, offline-first medical imaging project for classifying Alzheimer-related MRI scans. The repository combines a Python inference backend, a Qt desktop client, and ONNX-based model execution so the full workflow can run without cloud services or deployment overhead.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
 ![C++ Version](https://img.shields.io/badge/c%2B%2B-17-blue)
 
----
+## Purpose
 
-## 📋 Project Overview
+The project exists to provide a reproducible research and development environment for MRI-based classification. Its focus is practical rather than infrastructure-heavy: load a trained ONNX model, expose it through a small FastAPI service, and consume it from a native Qt desktop application.
 
-NeuroSight AI is an intelligent CAD (Computer-Aided Diagnosis) system designed to assist radiologists in detecting early signs of Alzheimer's disease from MRI scans. Built with EfficientNet transfer learning and explainable AI (Grad-CAM heatmaps), the system provides fast, accurate, and interpretable diagnoses in a secure, offline-first architecture.
+## Architecture
 
-**Core Values:**
-- 🔒 **Privacy-First**: 100% local processing—no patient data leaves the device
-- ⚡ **Fast**: Diagnosis results in under 5 seconds
-- 🎯 **Accurate**: EfficientNet transfer learning on 6,400+ MRI images
-- 🔍 **Explainable**: Grad-CAM visualizations show model reasoning
-- 🏗️ **Professional**: Production-ready architecture with testable components
+The codebase is organized as a layered application with clear boundaries:
 
----
-
-## 🏛️ Architecture
-
-NeuroSight AI follows a **layered, decoupled architecture** with clear separation of concerns:
-
-```
-┌─────────────────────────────────────────┐
-│   Desktop Application (C++ / Qt)        │  User Interface
-├─────────────────────────────────────────┤
-│   REST API (FastAPI / Uvicorn)          │  HTTP Layer
-├─────────────────────────────────────────┤
-│   Business Logic (Python Services)      │  Application Layer
-├─────────────────────────────────────────┤
-│   AI Engine (ONNX Runtime)              │  Inference Layer
-├─────────────────────────────────────────┤
-│   Trained Model (EfficientNet)          │  ML Layer
-└─────────────────────────────────────────┘
+```text
+Qt Desktop App (C++/Qt)
+  ↓
+FastAPI Backend (HTTP facade)
+  ↓
+Prediction Service (file handling and orchestration)
+  ↓
+ONNX Inference Engine (model execution)
+  ↓
+Trained Model (models/weights/best_model.onnx)
 ```
 
-**Design Patterns Used:**
-- **Factory Pattern**: `src/ai_engine/factory.py` — Creates inference engine instances
-- **Strategy Pattern**: `src/ai_engine/engine.py` — Multiple inference strategies
-- **Service Layer**: `src/backend/services/prediction_service.py` — Orchestrates predictions
-- **DTO/Domain Objects**: `src/ai_engine/domain.py`, `src/backend/schemas.py` — Type-safe data transfer
-- **Facade Pattern**: `src/backend/app.py` — Clean REST API surface
+### Main layers
 
-**Benefit**: Each layer is independently testable, replaceable, and maintainable.
+- `src/cpp_app/NeuroSightAI_Desktop/` contains the native desktop application built with Qt and CMake.
+- `src/backend/` exposes the prediction workflow through FastAPI.
+- `src/ai_engine/` owns model loading, preprocessing, and ONNX runtime execution.
+- `src/data_pipeline/` provides dataset preparation utilities.
+- `scripts/` contains model export and model generation helpers.
+- `tests/` validates backend imports and prediction service behavior.
 
----
+## Design Patterns
 
-## 📦 Tech Stack
+The implementation uses a small set of patterns that match the actual code:
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **AI Model** | PyTorch / EfficientNet | Transfer learning on MRI classification |
-| **Model Export** | ONNX | Cross-platform, framework-agnostic inference |
-| **Backend API** | FastAPI | REST endpoints for predictions |
-| **Desktop UI** | C++ 17 / Qt 6.x | Native, lightweight interface for radiologists |
-| **Inference Runtime** | ONNX Runtime | Fast CPU/GPU inference in C++ and Python |
-| **Build System** | CMake | Cross-platform C++ build orchestration |
-| **Python Runtime** | Anaconda / Conda | Isolated Python environment management |
-| **Dataset** | Kaggle MRI Dataset | 6,400 images, 4 dementia levels |
+- **Factory**: `src/ai_engine/factory.py` creates the ONNX runtime session and returns a ready-to-use inference engine.
+- **Protocol / Strategy boundary**: `src/ai_engine/engine.py` defines the `InferenceEngine` contract, allowing the prediction layer to depend on an interface instead of a concrete runtime.
+- **Service Layer**: `src/backend/services/prediction_service.py` handles temporary file creation and delegates prediction work to the engine.
+- **Facade**: `src/backend/app.py` provides the HTTP surface with `/health` and `/predict` endpoints.
+- **DTO / Domain Model**: `src/ai_engine/domain.py` and `src/backend/schemas.py` define the data exchanged across layers.
 
----
+The result is a separation between transport, orchestration, and model execution. That keeps the code testable and makes it easier to swap runtimes or extend the desktop client without rewriting the backend.
 
-## 📂 Project Structure
+## Technology Stack
 
-```
+| Component | Technology | Role |
+|---|---|---|
+| Backend API | FastAPI | Exposes health and prediction endpoints |
+| Inference Runtime | ONNX Runtime | Executes the exported model locally |
+| Python Environment | Anaconda / Conda | Isolated development setup |
+| Desktop App | C++17 / Qt | Native local user interface |
+| Build System | CMake 3.16+ | Builds the Qt desktop application |
+| Model Assets | ONNX / PyTorch | Stores trained weights and exported inference model |
+
+## Repository Layout
+
+```text
 NeuroSight_AI/
-├── README.md                    # Main documentation (this file)
-├── LICENSE                      # MIT License
-├── requirements.txt             # Python dependencies
-│
-├── src/                         # Main source code
-│   ├── ai_engine/              # AI model loading and inference
-│   │   ├── factory.py          # Model engine factory
-│   │   ├── engine.py           # Inference strategies
-│   │   ├── inference.py        # High-level inference API
-│   │   ├── loader.py           # Model weight loading
-│   │   ├── domain.py           # Data structures
-│   │   └── __init__.py
-│   │
-│   ├── backend/                # FastAPI REST backend
-│   │   ├── app.py              # FastAPI application and routes
-│   │   ├── schemas.py          # Pydantic request/response models
-│   │   ├── services/           # Business logic services
-│   │   │   ├── prediction_service.py
-│   │   │   └── __init__.py
-│   │   └── __init__.py
-│   │
-│   ├── cpp_app/                # Qt Desktop Application (C++)
-│   │   ├── NeuroSightAI_Desktop/
-│   │   │   ├── CMakeLists.txt  # CMake build configuration
-│   │   │   ├── NeuroSightAI.pro # Qt project file (alternative to CMake)
-│   │   │   ├── src/            # C++ source files
-│   │   │   │   ├── main.cpp
-│   │   │   │   ├── mainwindow.cpp/h
-│   │   │   │   └── modelhandler.cpp/h
-│   │   │   ├── ui/             # Qt Designer UI files
-│   │   │   ├── resources/      # Images, stylesheets
-│   │   │   ├── third_party/    # ONNX Runtime includes
-│   │   │   └── build/          # CMake build output (generated)
-│   │   └── README.md
-│   │
-│   ├── data_pipeline/          # Data preprocessing
-│   │   ├── etl.py
-│   │   ├── impl.py
-│   │   └── __init__.py
-│   │
-│   ├── python/                 # Additional Python utilities
-│   │   ├── inference.py
-│   │   └── __init__.py
-│   │
-│   ├── cli/                    # Command-line interface
-│   │   └── manage.py
-│   │
-│   └── __init__.py
-│
-├── models/                      # Trained model weights
-│   └── weights/
-│       ├── best_model.pt       # PyTorch checkpoint
-│       └── best_model.onnx     # ONNX model (for deployment)
-│
-├── scripts/                     # Utility scripts
-│   ├── export_to_onnx.py       # Convert PyTorch → ONNX
-│   └── generate_best_model.py  # Model training/generation
-│
-├── notebooks/                   # Jupyter notebooks for experimentation
-│   ├── 01_data_audit.ipynb
-│   ├── NeuroSight_Analysis.ipynb
-│   └── reports/
-│       ├── audit_report.md
-│       └── figures/
-│
-├── tests/                       # Unit and integration tests
-│   ├── test_backend_import.py
-│   ├── test_data_pipeline_import.py
-│   └── test_prediction_service.py
-│
-├── data/                        # Local dataset storage
-│   └── samples/                # Sample MRI images
-│
-└── docs/                        # Documentation (reserved for academic papers, guides)
+├── README.md
+├── LICENSE
+├── requirements.txt
+├── data/
+├── docs/
+├── models/
+├── notebooks/
+├── scripts/
+├── src/
+└── tests/
 ```
 
----
+### Key source folders
 
-## 🚀 Quick Start
+- `src/backend/app.py` wires the FastAPI app, CORS setup, and prediction endpoint.
+- `src/backend/services/prediction_service.py` manages temporary uploads and prediction calls.
+- `src/ai_engine/factory.py` loads the ONNX model and chooses the available execution provider.
+- `src/ai_engine/engine.py` preprocesses input images and turns model output into a `PredictionResult`.
+- `src/cpp_app/NeuroSightAI_Desktop/CMakeLists.txt` configures the Qt desktop build.
 
-### Prerequisites
+## Local Development Setup
 
-- **Python 3.10+** (preferably via Anaconda)
-- **CMake 3.20+** (for building C++ desktop app)
-- **Qt 6.x** (for desktop UI; can be installed via Qt Online Installer or package manager)
-- **ONNX Runtime** (automatically installed via pip)
-- **Git**
-
-### Step 1: Set Up Python Environment
-
-#### Option A: Using Anaconda (Recommended)
+### 1. Python environment with Anaconda
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/NeuroSight_AI.git
-cd NeuroSight_AI
-
-# Create Anaconda environment
 conda create -n neurosight python=3.11 -y
 conda activate neurosight
-
-# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-#### Option B: Using venv
+### 2. Run the backend
 
 ```bash
-git clone https://github.com/your-org/NeuroSight_AI.git
-cd NeuroSight_AI
-
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+python -m uvicorn src.backend.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### Step 2: Verify Installation
+The backend exposes:
 
-```bash
-# Test Python backend imports
-python -m pytest tests/ -v
+- `GET /health` for readiness checks
+- `POST /predict` for MRI image classification
 
-# Test backend API startup
-python -m uvicorn src.backend.app:app --reload --host 0.0.0.0 --port 8000
-```
+### 3. Build the desktop application with CMake and Qt
 
-**Expected Output:**
-```
-INFO:     Uvicorn running on http://0.0.0.0:8000
-INFO:     Application startup complete
-```
+Requirements for the desktop client:
 
-API will be available at `http://localhost:8000`  
-Interactive docs at `http://localhost:8000/docs`
+- C++17 toolchain
+- CMake 3.16 or newer
+- Qt 6.x
+- ONNX Runtime libraries in `src/cpp_app/NeuroSightAI_Desktop/third_party/onnxruntime/`
 
----
-
-## 🖥️ Building the Desktop Application (C++ / Qt)
-
-### Prerequisites for Desktop Build
-
-- **Windows**: Visual Studio 2022 (MSVC 2022) or MinGW
-- **Linux/macOS**: GCC/Clang with standard development tools
-- **Qt 6.x**: [Download Qt](https://www.qt.io/download-open-source) or install via:
-  - **Linux (Ubuntu/Debian)**: `sudo apt-get install qt6-base-dev qt6-tools-dev`
-  - **macOS**: `brew install qt6`
-  - **Windows**: Use Qt Online Installer or `vcpkg install qt6`
-
-### Build Steps
+Build steps:
 
 ```bash
 cd src/cpp_app/NeuroSightAI_Desktop
-
-# Create build directory
-mkdir build
-cd build
-
-# Configure with CMake
-cmake .. -DCMAKE_BUILD_TYPE=Release
-
-# Build the application
-cmake --build . --config Release
-
-# On Windows (Visual Studio):
-cmake --build . --config Release --verbose
-
-# On Linux/macOS:
-cmake --build . -- -j$(nproc)
+cmake -S . -B build
+cmake --build build --config Release
 ```
 
-**Alternatively (using Qt Creator):**
-```bash
-# Open project in Qt Creator
-cd src/cpp_app/NeuroSightAI_Desktop
-# File → Open Project → Select NeuroSightAI.pro or CMakeLists.txt
-# Click "Build" or press Ctrl+B
-```
+On Windows, Visual Studio 2022 is the intended generator. On Linux and macOS, use the Qt-supported C++ compiler installed on the machine.
 
-### Run the Desktop Application
+### 4. Launch the desktop app
+
+After a successful build, run the generated executable from the `build` directory. The desktop client expects the backend to be available locally and the exported model to be present at `models/weights/best_model.onnx`.
+
+## Project Data Flow
+
+1. An MRI image is selected in the desktop application or submitted to the backend.
+2. The backend stores the upload temporarily and passes the file path to the inference engine.
+3. `OnnxInferenceEngine` preprocesses the image, runs the model, and produces a prediction.
+4. The response is converted to a stable schema and returned to the client.
+
+## Testing
 
 ```bash
-# After successful build, run the executable
-# Windows:
-./Release/NeuroSightAI.exe
-
-# Linux/macOS:
-./NeuroSightAI
+python -m pytest tests -v
 ```
 
-**Required for Runtime:**
-- The backend FastAPI server must be running on `http://localhost:8000`
-- Model weights must be present in `models/weights/best_model.onnx`
+The tests focus on module import health and the prediction service workflow, which are the most important integration points for this repository.
 
----
+## Notes
 
-## 🧪 Testing
+- The project is intentionally kept free of Docker and deployment-specific packaging.
+- Generated build artifacts and caches are ignored through `.gitignore`.
+- Model weights in `models/weights/` are treated as project assets and should remain under version control if they are part of the reproducible workflow.
 
-### Run All Tests
+## License
 
-```bash
-# Activate environment
-conda activate neurosight  # or source venv/bin/activate
-
-# Run pytest suite
-python -m pytest tests/ -v --tb=short
-```
-
-### Individual Test Files
-
-```bash
-# Test backend imports
-python -m pytest tests/test_backend_import.py -v
-
-# Test prediction service
-python -m pytest tests/test_prediction_service.py -v
-
-# Test data pipeline
-python -m pytest tests/test_data_pipeline_import.py -v
-```
-
----
-
-## 🔄 Development Workflow
-
-### Training a New Model
-
-```bash
-# Preprocess data
-python src/data_pipeline/etl.py --input raw_data/ --output data/processed/
-
-# Train the model (see notebooks/NeuroSight_Analysis.ipynb)
-python scripts/generate_best_model.py --epochs 50 --batch-size 32
-
-# Export to ONNX for deployment
-python scripts/export_to_onnx.py --input models/best_model.pt --output models/weights/best_model.onnx
-```
-
-### Running Backend API in Development
-
-```bash
-# With auto-reload
-python -m uvicorn src.backend.app:app --reload --port 8000
-
-# With debug logging
-LOGLEVEL=DEBUG python -m uvicorn src.backend.app:app --reload --port 8000
-```
-
-### Accessing API Documentation
-
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-
----
-
-## 📊 API Endpoints
-
-### Health Check
-
-```bash
-curl http://localhost:8000/health
-```
-
-### Predict MRI Image
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -F "file=@path/to/mri_image.jpg"
-```
-
-**Response:**
-```json
-{
-  "prediction": "Mild Dementia",
-  "confidence": 0.94,
-  "class": 2,
-  "heatmap_url": "/static/heatmap_xyz.png"
-}
-```
-
----
-
-## 🔒 Privacy & Security
-
-- ✅ **No Cloud Storage**: All patient data remains on-premises
-- ✅ **No Telemetry**: No tracking or analytics
-- ✅ **Offline-First**: Desktop app works without internet
-- ✅ **Encrypted Communication**: HTTPS recommended for enterprise deployments
-- ✅ **HIPAA Considerations**: Suitable for healthcare environments with proper compliance setup
-
----
-
-## 📜 License
-
-This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
-
-**Copyright © 2026 Wilfried TSETSE & Leila KHEZAZ**
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork** the repository
-2. **Create** a feature branch: `git checkout -b feature/your-feature`
-3. **Commit** changes with clear messages: `git commit -m "Add your feature"`
-4. **Push** to your fork: `git push origin feature/your-feature`
-5. **Submit** a Pull Request with a description
-
-### Code Standards
-
-- Python: Follow [PEP 8](https://www.python.org/dev/peps/pep-0008/) with Black formatter
-- C++: Follow C++17 standards, aim for readable and maintainable code
-- Tests: All new features must include unit tests
-- Documentation: Update README and docstrings as needed
-
----
-
-## 📚 Documentation
-
-- **[C++ Build Guide](src/cpp_app/README.md)** — Detailed desktop app build instructions
-- **[C++ Setup Guide](src/cpp_app/NeuroSightAI_Desktop/SETUP_GUIDE.md)** — Environment setup for C++ development
-- **[Data Audit Report](notebooks/reports/audit_report.md)** — Dataset analysis and statistics
-
----
-
-## 🐛 Troubleshooting
-
-### Python Dependencies Issue
-
-```bash
-# Ensure pip is up-to-date
-pip install --upgrade pip setuptools wheel
-
-# Reinstall requirements
-pip install -r requirements.txt --force-reinstall
-```
-
-### Qt Build Fails
-
-```bash
-# Verify Qt installation
-qmake --version
-cmake --version
-
-# On Windows with Visual Studio, explicitly set generator:
-cd build
-cmake .. -G "Visual Studio 17 2022"
-```
-
-### ONNX Runtime Issues
-
-```bash
-# Install latest ONNX Runtime
-pip install --upgrade onnxruntime
-
-# For GPU acceleration (CUDA):
-pip install onnxruntime-gpu
-```
-
-### Backend API Connection Issues
-
-```bash
-# Verify FastAPI is running
-curl http://localhost:8000/health
-
-# Check if port 8000 is in use
-netstat -an | grep 8000  # Linux/macOS
-netstat -ano | findstr :8000  # Windows
-```
-
----
-
-## 📞 Support & Contact
-
-For questions, issues, or discussions:
-
-- **GitHub Issues**: [Open an issue](https://github.com/your-org/NeuroSight_AI/issues)
-- **Email**: wilfried.tsetse@ensa-safi.ac.ma
-
----
-
-## 🎯 Roadmap
-
-- [ ] GPU acceleration with TensorRT
-- [ ] Web-based UI (React/Vue.js)
-- [ ] Multi-model ensemble support
-- [ ] DICOM file format support
-- [ ] Continuous integration/deployment pipeline
-- [ ] Advanced analytics dashboard
-
----
-
-## 👥 Project Authors
-
-**Developed by Engineering Students (GIIA - 2e year):**
-
-- 👨‍💻 **Wilfried TSETSE** — AI Engine & Backend Development
-- 👩‍💻 **Leila KHEZAZ** — Data Pipeline & Desktop Application
-
-**Institution**: ENSA Safi (Ecole Nationale des Sciences Appliquées)  
-**Supervisor**: Mme Manal ZETTAM
-
----
-
-**Made with ❤️ at ENSA Safi** 🇲🇦
-
-*NeuroSight AI is an academic prototype. It is not a certified medical device and should not be used for actual clinical diagnosis without proper regulatory certification.*
+MIT License. See [LICENSE](LICENSE) for details.
