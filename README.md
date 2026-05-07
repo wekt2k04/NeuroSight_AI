@@ -1,152 +1,201 @@
 # NeuroSight AI
 
-NeuroSight AI is a local, offline-first medical imaging project for classifying Alzheimer-related MRI scans. The repository combines a Python inference backend, a Qt desktop client, and ONNX-based model execution so the full workflow can run without cloud services or deployment overhead.
+NeuroSight AI is a medical-imaging codebase for MRI-based Alzheimer-related classification. The repository contains two separate runtime surfaces: a Python FastAPI backend that performs ONNX inference, and a Qt/C++ desktop application that also performs ONNX Runtime inference directly inside the client. In addition, the repo includes a research-style data pipeline, training/export scripts, notebooks, tests, and the tracked model weights.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
-![C++ Version](https://img.shields.io/badge/c%2B%2B-17-blue)
+The project is intentionally local-first. There is no Docker support in the repository anymore, and the cleaned workspace is meant to stay source-only: code, models, data samples, notebooks, and documentation.
 
-## Purpose
+## What Is Actually In This Repository
 
-The project exists to provide a reproducible research and development environment for MRI-based classification. Its focus is practical rather than infrastructure-heavy: load a trained ONNX model, expose it through a small FastAPI service, and consume it from a native Qt desktop application.
+- `src/backend/` contains the FastAPI service with `/health` and `/predict`.
+- `src/ai_engine/` contains the Python ONNX inference layer and compatibility wrappers.
+- `src/cpp_app/NeuroSightAI_Desktop/` contains the Qt desktop client and its CMake project.
+- `src/data_pipeline/` contains the reusable ETL pipeline extracted from notebook work.
+- `scripts/` contains model export and model generation helpers.
+- `tests/` contains import and service tests.
+- `models/weights/` stores the tracked model artifacts.
+- `data/` stores sample MRI images and local data assets.
+- `notebooks/` stores exploratory analysis and audit notebooks.
 
 ## Architecture
 
-The codebase is organized as a layered application with clear boundaries:
+The codebase is organized as a set of thin layers around a shared ONNX model artifact.
 
 ```text
-Qt Desktop App (C++/Qt)
-  ↓
-FastAPI Backend (HTTP facade)
-  ↓
-Prediction Service (file handling and orchestration)
-  ↓
-ONNX Inference Engine (model execution)
-  ↓
-Trained Model (models/weights/best_model.onnx)
+Python backend
+  FastAPI app -> prediction service -> ONNX inference engine
+
+Desktop client
+  Qt UI -> ModelHandler -> ONNX Runtime session
+
+Research utilities
+  data pipeline -> notebooks -> scripts -> trained/exported model files
 ```
 
-### Main layers
+### Python Backend Flow
 
-- `src/cpp_app/NeuroSightAI_Desktop/` contains the native desktop application built with Qt and CMake.
-- `src/backend/` exposes the prediction workflow through FastAPI.
-- `src/ai_engine/` owns model loading, preprocessing, and ONNX runtime execution.
-- `src/data_pipeline/` provides dataset preparation utilities.
-- `scripts/` contains model export and model generation helpers.
-- `tests/` validates backend imports and prediction service behavior.
+The backend is defined in `src/backend/app.py` and does the following:
 
-## Design Patterns
+- creates a FastAPI app
+- enables permissive CORS
+- loads a model through `src.ai_engine.loader.load_model()`
+- exposes `GET /health`
+- exposes `POST /predict` when multipart file uploads are available
 
-The implementation uses a small set of patterns that match the actual code:
+The backend uses `PredictionService` to save an uploaded file to a temporary path, run inference, and then delete the temporary file.
 
-- **Factory**: `src/ai_engine/factory.py` creates the ONNX runtime session and returns a ready-to-use inference engine.
-- **Protocol / Strategy boundary**: `src/ai_engine/engine.py` defines the `InferenceEngine` contract, allowing the prediction layer to depend on an interface instead of a concrete runtime.
-- **Service Layer**: `src/backend/services/prediction_service.py` handles temporary file creation and delegates prediction work to the engine.
-- **Facade**: `src/backend/app.py` provides the HTTP surface with `/health` and `/predict` endpoints.
-- **DTO / Domain Model**: `src/ai_engine/domain.py` and `src/backend/schemas.py` define the data exchanged across layers.
+### Python Inference Layer
 
-The result is a separation between transport, orchestration, and model execution. That keeps the code testable and makes it easier to swap runtimes or extend the desktop client without rewriting the backend.
+The ONNX path is implemented in `src/ai_engine/`:
 
-## Technology Stack
+- `factory.py` resolves the model path and creates an `onnxruntime.InferenceSession`
+- `engine.py` defines an `InferenceEngine` protocol and the `OnnxInferenceEngine` implementation
+- `engine.py` preprocesses images to `224x224`, normalizes them with ImageNet-style statistics, and returns a softmaxed `PredictionResult`
+- `domain.py` defines the `PredictionResult` dataclass
+- `loader.py` is a thin compatibility wrapper so the backend can keep a stable import path
 
-| Component | Technology | Role |
-|---|---|---|
-| Backend API | FastAPI | Exposes health and prediction endpoints |
-| Inference Runtime | ONNX Runtime | Executes the exported model locally |
-| Python Environment | Anaconda / Conda | Isolated development setup |
-| Desktop App | C++17 / Qt | Native local user interface |
-| Build System | CMake 3.16+ | Builds the Qt desktop application |
-| Model Assets | ONNX / PyTorch | Stores trained weights and exported inference model |
+### Desktop Client Flow
 
-## Repository Layout
+The desktop app is in `src/cpp_app/NeuroSightAI_Desktop/` and is not a wrapper around the Python backend. It loads ONNX Runtime directly in C++.
 
-```text
-NeuroSight_AI/
-├── README.md
-├── LICENSE
-├── requirements.txt
-├── data/
-├── docs/
-├── models/
-├── notebooks/
-├── scripts/
-├── src/
-└── tests/
-```
+- `main.cpp` starts the Qt application and opens the main window
+- `mainwindow.*` manages the UI workflow, drag-and-drop, shortcuts, progress state, and result display
+- `modelhandler.*` loads `best_model.onnx`, runs ONNX inference, computes probabilities, builds a Grad-CAM-style heatmap overlay, and emits the result back to the UI
 
-### Key source folders
+The desktop app uses a workflow state machine with these states:
 
-- `src/backend/app.py` wires the FastAPI app, CORS setup, and prediction endpoint.
-- `src/backend/services/prediction_service.py` manages temporary uploads and prediction calls.
-- `src/ai_engine/factory.py` loads the ONNX model and chooses the available execution provider.
-- `src/ai_engine/engine.py` preprocesses input images and turns model output into a `PredictionResult`.
-- `src/cpp_app/NeuroSightAI_Desktop/CMakeLists.txt` configures the Qt desktop build.
+- `AwaitingImage`
+- `ImageReady`
+- `Analyzing`
+- `ResultReady`
+- `ErrorState`
+
+## Design Patterns That Are Actually Present
+
+- **Factory**: `src/ai_engine/factory.py` encapsulates model-session creation.
+- **Protocol / Strategy Boundary**: `src/ai_engine/engine.py` defines `InferenceEngine` as a protocol and provides `OnnxInferenceEngine` as the concrete implementation.
+- **Facade**: `src/backend/app.py` keeps the HTTP surface thin and delegates work outward.
+- **Service Layer**: `src/backend/services/prediction_service.py` owns upload-to-file and file-to-prediction orchestration.
+- **DTO / Domain Model**: `src/ai_engine/domain.py` and `src/backend/schemas.py` define the data passed between layers.
+- **UI State Machine**: `src/cpp_app/NeuroSightAI_Desktop/src/mainwindow.*` drives the desktop workflow through explicit states.
+
+## Important Truths And Caveats
+
+This section exists because the source code contains a few real-world mismatches that should not be glossed over.
+
+1. **The backend default model path is not the same as the tracked model location.**
+   - `src/backend/app.py` defaults to `models/model.onnx`.
+   - The repository actually tracks weights under `models/weights/`.
+   - If you run the backend, set `MODEL_PATH` to a real ONNX file path.
+
+2. **The Python engine and the desktop app use different label strings.**
+   - Python inference uses `Normal`, `Mild`, `Moderate`, `Severe` in `src/ai_engine/engine.py`.
+   - The C++ app uses `NonDemented`, `VeryMildDemented`, `MildDemented`, `ModerateDemented` in `modelhandler.cpp`.
+   - The documentation should not pretend those labels are unified.
+
+3. **The desktop client does not call the backend at runtime.**
+   - The C++ code loads ONNX directly.
+   - The backend is a separate runtime path for API-based use.
+
+4. **File upload support depends on `python-multipart`.**
+   - If that package is unavailable, the backend exposes a 503 message for upload-based prediction.
+
+5. **There is no Docker workflow in this repository now.**
+   - Dockerfile and compose files were intentionally removed.
 
 ## Local Development Setup
 
-### 1. Python environment with Anaconda
+### 1. Create a Conda Environment
+
+Use Anaconda or Miniconda to create an isolated Python environment.
 
 ```bash
-conda create -n neurosight python=3.11 -y
+conda create -n neurosight python=3.10 -y
 conda activate neurosight
 pip install -r requirements.txt
 ```
 
-### 2. Run the backend
+If you prefer `venv`, that also works, but the repository documentation now favors Conda because it is the cleanest way to reproduce the Python runtime.
+
+### 2. Prepare a Valid ONNX Model File
+
+The backend and desktop app both expect an ONNX model file to exist somewhere on disk.
+
+- For the backend, set `MODEL_PATH` to the ONNX file you want to load.
+- For the desktop app, place `best_model.onnx` next to the executable or keep the repository layout so the fallback path can find `models/weights/best_model.onnx`.
+
+### 3. Run The FastAPI Backend
 
 ```bash
-python -m uvicorn src.backend.app:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn src.backend.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The backend exposes:
+The backend provides:
 
-- `GET /health` for readiness checks
-- `POST /predict` for MRI image classification
+- `GET /health`
+- `POST /predict` with multipart file upload
 
-### 3. Build the desktop application with CMake and Qt
+The health response reports whether the model was loaded successfully.
 
-Requirements for the desktop client:
+### 4. Run The Desktop Client
 
-- C++17 toolchain
-- CMake 3.16 or newer
-- Qt 6.x
-- ONNX Runtime libraries in `src/cpp_app/NeuroSightAI_Desktop/third_party/onnxruntime/`
-
-Build steps:
+Open `src/cpp_app/NeuroSightAI_Desktop/CMakeLists.txt` in Qt Creator or build it from the command line.
 
 ```bash
 cd src/cpp_app/NeuroSightAI_Desktop
-cmake -S . -B build
-cmake --build build --config Release
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
 ```
 
-On Windows, Visual Studio 2022 is the intended generator. On Linux and macOS, use the Qt-supported C++ compiler installed on the machine.
+The checked-in CMake project expects:
 
-### 4. Launch the desktop app
+- Qt 6
+- ONNX Runtime files under `third_party/onnxruntime/`
+- a working local model file
 
-After a successful build, run the generated executable from the `build` directory. The desktop client expects the backend to be available locally and the exported model to be present at `models/weights/best_model.onnx`.
+On Windows, the CMake file copies `onnxruntime.dll` next to the executable after build.
 
-## Project Data Flow
-
-1. An MRI image is selected in the desktop application or submitted to the backend.
-2. The backend stores the upload temporarily and passes the file path to the inference engine.
-3. `OnnxInferenceEngine` preprocesses the image, runs the model, and produces a prediction.
-4. The response is converted to a stable schema and returned to the client.
-
-## Testing
+### 5. Run Tests
 
 ```bash
 python -m pytest tests -v
 ```
 
-The tests focus on module import health and the prediction service workflow, which are the most important integration points for this repository.
+## Data Pipeline
 
-## Notes
+`src/data_pipeline/etl.py` exposes the public data-preparation entry point used by scripts and notebooks. The implementation in `src/data_pipeline/impl.py` is more specialized than a generic loader; it currently contains:
 
-- The project is intentionally kept free of Docker and deployment-specific packaging.
-- Generated build artifacts and caches are ignored through `.gitignore`.
-- Model weights in `models/weights/` are treated as project assets and should remain under version control if they are part of the reproducible workflow.
+- CSV or Excel metadata loading
+- iterative imputation with scikit-learn
+- patient-aware grouping logic
+- class balancing with `WeightedRandomSampler`
+- image augmentation and normalization
+- cached in-memory image loading for faster iteration
+
+That pipeline is useful for the research workflow, but it is not the same thing as the runtime API.
+
+## Scripts
+
+- `scripts/export_to_onnx.py` exports the trained PyTorch model to ONNX.
+- `scripts/generate_best_model.py` creates or regenerates the model checkpoint used by the project.
+
+## Documentation And Notebook Material
+
+- `notebooks/01_data_audit.ipynb` contains data-audit work.
+- `notebooks/NeuroSight_Analysis.ipynb` contains analysis and experimentation work.
+- `notebooks/reports/audit_report.md` records the audit output.
+
+## What This Project Is For
+
+The repository is best understood as a compact medical-imaging engineering workspace with three purposes:
+
+1. train or regenerate a model offline
+2. run inference through a Python API
+3. run the same model through a native Qt desktop client
+
+The architecture is intentionally simple enough to inspect, yet modular enough that the model layer, HTTP layer, UI layer, and preprocessing layer can evolve independently.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE).
