@@ -69,35 +69,55 @@ class OASISDataset(Dataset):
         return image, label
 
 
-# ==========================================================
-# 3. STRATIFIED GROUP SPLIT (CRITICAL FIX)
-# ==========================================================
-def stratified_group_split(df, val_split=0.2, seed=42):
+def stratified_group_split(df, val_split=0.2, test_split=0.1, seed=42):
     """
-    Patient-level split that guarantees all classes appear in validation set.
+    Patient-level split with STRICT class balancing.
+    Ensures every class appears in train, val, AND test sets.
     """
     random.seed(seed)
-
-    # Majority label per patient
+    
+    # Get majority label per patient
     patient_label = df.groupby('patient_id')['label'].agg(lambda x: x.mode()[0]).to_dict()
-
+    
     # Group patients by class
     class_patients = defaultdict(list)
     for pid, lbl in patient_label.items():
         class_patients[lbl].append(pid)
-
+    
+    train_patients = set()
     val_patients = set()
-
+    test_patients = set()
+    
     for lbl, patients in class_patients.items():
         random.shuffle(patients)
-        n_val = max(1, int(len(patients) * val_split))
+        n_total = len(patients)
+        
+        # Ensure at least 1 sample per class in val and test
+        n_val = max(1, int(n_total * val_split))
+        n_test = max(1, int(n_total * test_split))
+        n_train = n_total - n_val - n_test
+        
+        # Handle cases with very few patients per class
+        if n_train < 1:
+            # Not enough patients - adjust split
+            n_val = max(1, n_total // 3)
+            n_test = max(1, n_total // 3)
+            n_train = n_total - n_val - n_test
+            if n_train < 0:
+                n_train = 0
+        
         val_patients.update(patients[:n_val])
-
-    mask = df['patient_id'].isin(val_patients)
-
+        test_patients.update(patients[n_val:n_val + n_test])
+        train_patients.update(patients[n_val + n_test:])
+    
+    train_mask = df['patient_id'].isin(train_patients)
+    val_mask = df['patient_id'].isin(val_patients)
+    test_mask = df['patient_id'].isin(test_patients)
+    
     return (
-        df[~mask].reset_index(drop=True),
-        df[mask].reset_index(drop=True)
+        df[train_mask].reset_index(drop=True),
+        df[val_mask].reset_index(drop=True),
+        df[test_mask].reset_index(drop=True)
     )
 
 
@@ -230,11 +250,10 @@ def stratified_group_split(df, val_split=0.2, seed=42):
 
 def prepare_data(csv_path: str, images_dir: str,
                  batch_size: int = 32,
-                 val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
+                 val_split: float = 0.15,
+                 test_split: float = 0.15) -> Tuple[DataLoader, DataLoader, DataLoader, List[str]]:
     """
-    NeuroSight AI - Nuclear Data Pipeline
-    Matches EfficientNet-B2 resolution and uses adversarial augmentation 
-    to prevent the severe overfitting observed in Iteration 2.
+    Returns train_loader, val_loader, test_loader, class_names
     """
     print("📖 Loading clinical data + MICE imputation...")
 
@@ -243,13 +262,13 @@ def prepare_data(csv_path: str, images_dir: str,
     except Exception:
         df_clinical = pd.read_excel(csv_path)
 
-    # ---------------- MICE IMPUTATION ----------------
+    # MICE Imputation
     cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
     imputer = IterativeImputer(random_state=SEED, max_iter=10)
     df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
     print("   ✅ MICE imputation done.")
 
-    # ---------------- IMAGE LINKING ----------------
+    # Image Linking
     print(f"🔍 Scanning images: {images_dir}")
     valid_files = []
 
@@ -276,24 +295,57 @@ def prepare_data(csv_path: str, images_dir: str,
         raise ValueError("❌ No valid images found.")
     print(f"   ✅ {len(files_df)} images linked.")
 
-    # ---------------- STRATIFIED GROUP SPLIT ----------------
-    print("\n🛡️ Stratified Group Split (patient-level)...")
-    train_df, val_df = stratified_group_split(
+    # STRATIFIED 3-WAY SPLIT (train/val/test)
+    print("\n🛡️ Stratified Group Split (patient-level, class-balanced)...")
+    train_df, val_df, test_df = stratified_group_split(
         files_df,
         val_split=val_split,
+        test_split=test_split,
         seed=SEED
     )
-
-    # ---------------- NUCLEAR AUGMENTATION ----------------
-    # 1. RandomResizedCrop: Forces model to learn features, not brain position.
-    # 2. AdjustSharpness: Simulates varied MRI scan qualities.
-    # 3. Solarize: Adversarial noise to prevent pixel memorization.
     
+    # Print split statistics
+    print(f"\n📊 SPLIT STATISTICS:")
+    for name, df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
+        counts = df['label'].value_counts().sort_index()
+        print(f"   {name}: {dict(counts)}")
+    
+    # ========== STAGE 1: TRAIN SET BALANCING (OVERSAMPLING) ==========
+    print("\n⚖️ STAGE 1: Balancing TRAIN set with oversampling...")
+    
+    # Calculate target samples (use the largest class count or a fixed target)
+    class_counts = train_df['label'].value_counts()
+    target_per_class = max(class_counts.max(), 5000)  # At least 5000 per class
+    
+    balanced_train_dfs = []
+    for class_label in range(4):
+        class_df = train_df[train_df['label'] == class_label]
+        n_current = len(class_df)
+        
+        if n_current < target_per_class:
+            # Oversample with replacement
+            indices = np.random.choice(class_df.index, size=target_per_class, replace=True)
+            balanced_train_dfs.append(class_df.loc[indices])
+        else:
+            # Undersample
+            balanced_train_dfs.append(class_df.sample(n=target_per_class, random_state=SEED))
+    
+    train_df_balanced = pd.concat(balanced_train_dfs, ignore_index=True)
+    print(f"   Train set balanced: {dict(train_df_balanced['label'].value_counts().sort_index())}")
+    
+    # ========== STAGE 2: Keep VAL and TEST as is (NO oversampling) ==========
+    # But ensure they have all classes represented
+    for name, df in [("Val", val_df), ("Test", test_df)]:
+        missing_classes = set(range(4)) - set(df['label'].unique())
+        if missing_classes:
+            print(f"   ⚠️ WARNING: {name} set missing classes: {missing_classes}")
+    
+    # Augmentation
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(260, scale=(0.8, 1.0)), 
+        transforms.RandomResizedCrop(260, scale=(0.7, 1.0)),  # More aggressive crop
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(15),
-        transforms.ColorJitter(brightness=0.25, contrast=0.25),
+        transforms.RandomRotation(20),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
         transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
         transforms.RandomSolarize(threshold=190, p=0.1),
         transforms.ToTensor(),
@@ -303,36 +355,33 @@ def prepare_data(csv_path: str, images_dir: str,
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((260, 260)), # Matched to B2 architecture
+        transforms.Resize((260, 260)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225])
     ])
 
-    train_dataset = OASISDataset(train_df, transform=train_transform)
+    train_dataset = OASISDataset(train_df_balanced, transform=train_transform)
     val_dataset = OASISDataset(val_df, transform=val_transform)
+    test_dataset = OASISDataset(test_df, transform=val_transform)
 
-    # ---------------- SAMPLER BOOST ----------------
-    print("\n⚖️ Building WeightedRandomSampler...")
-    class_sample_count = np.bincount(train_df['label'])
-    
-    # We use 1/count but could also try 1/sqrt(count) if the model gets too 
-    # biased toward ModerateDemented. For now, let's stick to full inverse.
+    # ========== SAMPLER (for training only) ==========
+    class_sample_count = np.bincount(train_df_balanced['label'])
     class_weights = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
-    samples_weights = class_weights[train_df['label'].values]
-
+    samples_weights = class_weights[train_df_balanced['label'].values]
+    
     sampler = WeightedRandomSampler(
         weights=samples_weights,
         num_samples=len(samples_weights),
         replacement=True
     )
 
-    # ---------------- DATALOADERS ----------------
+    # DataLoaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         sampler=sampler,
-        num_workers=4, # Increased for faster preprocessing
+        num_workers=4,
         pin_memory=True
     )
 
@@ -343,9 +392,17 @@ def prepare_data(csv_path: str, images_dir: str,
         num_workers=4,
         pin_memory=True
     )
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
 
-    print("🚀 Pipeline ready. Resolution: 260x260. Strategy: Adversarial.")
-    return train_loader, val_loader, CLASS_NAMES
+    print("🚀 Pipeline ready. Returns train, val, test loaders.")
+    return train_loader, val_loader, test_loader, CLASS_NAMES
 
 # ==========================================================
 # 5. VISUALIZATION UTILITIES
