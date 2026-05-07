@@ -71,49 +71,70 @@ class OASISDataset(Dataset):
 
 def stratified_group_split(df, val_split=0.2, test_split=0.1, seed=42):
     """
-    Patient-level split with STRICT class balancing.
-    Ensures every class appears in train, val, AND test sets.
+    Patient-level split with class balancing.
+    Ensures at least one patient per class in TRAIN whenever possible.
     """
     random.seed(seed)
-    
-    # Get majority label per patient
-    patient_label = df.groupby('patient_id')['label'].agg(lambda x: x.mode()[0]).to_dict()
-    
-    # Group patients by class
+
+    patient_label = (
+        df.groupby('patient_id')['label']
+        .agg(lambda x: x.mode()[0])
+        .to_dict()
+    )
+
     class_patients = defaultdict(list)
+
     for pid, lbl in patient_label.items():
         class_patients[lbl].append(pid)
-    
+
     train_patients = set()
     val_patients = set()
     test_patients = set()
-    
+
     for lbl, patients in class_patients.items():
         random.shuffle(patients)
+
         n_total = len(patients)
-        
-        # Ensure at least 1 sample per class in val and test
-        n_val = max(1, int(n_total * val_split))
-        n_test = max(1, int(n_total * test_split))
-        n_train = n_total - n_val - n_test
-        
-        # Handle cases with very few patients per class
-        if n_train < 1:
-            # Not enough patients - adjust split
-            n_val = max(1, n_total // 3)
-            n_test = max(1, n_total // 3)
+
+        # SMALL CLASSES HANDLING
+        if n_total == 1:
+            train_patients.update(patients)
+
+        elif n_total == 2:
+            train_patients.add(patients[0])
+            val_patients.add(patients[1])
+
+        else:
+            n_val = max(1, int(n_total * val_split))
+            n_test = max(1, int(n_total * test_split))
+
+            # Ensure at least 1 train sample
+            while n_total - n_val - n_test < 1:
+                if n_val > n_test and n_val > 1:
+                    n_val -= 1
+                elif n_test > 1:
+                    n_test -= 1
+                else:
+                    break
+
             n_train = n_total - n_val - n_test
-            if n_train < 0:
-                n_train = 0
-        
-        val_patients.update(patients[:n_val])
-        test_patients.update(patients[n_val:n_val + n_test])
-        train_patients.update(patients[n_val + n_test:])
-    
+
+            train_patients.update(
+                patients[:n_train]
+            )
+
+            val_patients.update(
+                patients[n_train:n_train + n_val]
+            )
+
+            test_patients.update(
+                patients[n_train + n_val:]
+            )
+
     train_mask = df['patient_id'].isin(train_patients)
     val_mask = df['patient_id'].isin(val_patients)
     test_mask = df['patient_id'].isin(test_patients)
-    
+
     return (
         df[train_mask].reset_index(drop=True),
         df[val_mask].reset_index(drop=True),
