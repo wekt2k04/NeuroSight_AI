@@ -1,11 +1,13 @@
 """
-NeuroSight AI - Data Pipeline Module (Adjusted for Better Specificity)
+NeuroSight AI - Data Pipeline Module (Final Optimized Version)
 =====================================================================================
 
 Adjustments made:
-- Reduced class weight aggression (0.8, 0.9, 1.2, 1.1 instead of 0.6, 0.6, 1.54, 1.23)
-- Balanced training set size increased to 6000 samples per class
+- Increased Mild class weight to 1.5x (was 1.2x)
+- Moderate class weight to 1.2x (was 1.1x)
+- Balanced training set size: 6000 samples per class
 - Enhanced augmentation for better generalization
+- Class-specific thresholding support
 """
 
 import os
@@ -180,12 +182,12 @@ def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class
 
 
 # ==========================================================
-# 5. CLASS WEIGHTS FOR LOSS FUNCTION (ADJUSTED)
+# 5. CLASS WEIGHTS FOR LOSS FUNCTION (OPTIMIZED FOR MILD)
 # ==========================================================
-def get_class_weights(train_df, method='balanced'):
+def get_class_weights(train_df, method='focus'):
     """
     Calculate class weights for loss function.
-    method: 'balanced' (inverse frequency) or 'focus' (adjusted for Mild/Moderate)
+    method: 'balanced' (inverse frequency) or 'focus' (higher weights for Mild/Moderate)
     """
     class_counts = train_df['label'].value_counts().sort_index().values
     
@@ -193,11 +195,11 @@ def get_class_weights(train_df, method='balanced'):
         weights = 1.0 / class_counts
         weights = weights / weights.sum() * len(class_counts)
     elif method == 'focus':
-        # ADJUSTED: Lower weights for Mild/Moderate to improve specificity
+        # OPTIMIZED: Higher weight for Mild (2) to improve detection
         base_weights = 1.0 / class_counts
         focus_weights = base_weights.copy()
-        focus_weights[2] *= 1.2  # Mild gets 1.2x weight (was 2.5)
-        focus_weights[3] *= 1.1  # Moderate gets 1.1x weight (was 2.0)
+        focus_weights[2] *= 1.5  # Mild gets 1.5x weight (increased from 1.2)
+        focus_weights[3] *= 1.2  # Moderate gets 1.2x weight (increased from 1.1)
         weights = focus_weights / focus_weights.sum() * len(class_counts)
     else:
         weights = np.ones(len(class_counts))
@@ -307,15 +309,15 @@ def prepare_data(csv_path: str, images_dir: str,
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(260, scale=(0.6, 1.0)),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),  # Reduced from 25
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),  # Reduced strength
+        transforms.RandomRotation(20),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
         transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
-        transforms.RandomGrayscale(p=0.05),  # Reduced from 0.1
+        transforms.RandomGrayscale(p=0.05),
         transforms.RandomSolarize(threshold=190, p=0.1),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15))  # Reduced from 0.25
+        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15))
     ])
 
     val_transform = transforms.Compose([
@@ -340,7 +342,7 @@ def prepare_data(csv_path: str, images_dir: str,
         replacement=True
     )
     
-    # ========== CLASS WEIGHTS FOR LOSS (ADJUSTED) ==========
+    # ========== CLASS WEIGHTS FOR LOSS (OPTIMIZED) ==========
     class_weights = get_class_weights(train_df_balanced, method=class_weight_method)
     print(f"\n⚖️ Class weights for loss: {class_weights.numpy()}")
     print(f"   Classes: {CLASS_NAMES}")
