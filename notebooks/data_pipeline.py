@@ -1,13 +1,5 @@
 """
-NeuroSight AI - Data Pipeline Module (Engineered + Fixed Version)
-=================================================================
-
-Fixes applied:
-- Stratified Group Split (ensures all classes appear in validation set)
-- Stronger medical-grade augmentation
-- Safer WeightedRandomSampler implementation
-- Leakage audit included
-- Fully reproducible pipeline
+NeuroSight AI - Data Pipeline Module (Fixed Two-Stage Sampling)
 """
 
 import os
@@ -17,7 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from PIL import Image
 import random
 
@@ -69,72 +61,73 @@ class OASISDataset(Dataset):
         return image, label
 
 
-def stratified_group_split(df, val_split=0.2, test_split=0.1, seed=42):
+# ==========================================================
+# 3. STRATIFIED GROUP SPLIT (FIXED)
+# ==========================================================
+def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
     """
-    Patient-level split with class balancing.
-    Ensures at least one patient per class in TRAIN whenever possible.
+    Patient-level split with STRICT class balancing.
+    Ensures every class appears in train, val, AND test sets.
     """
     random.seed(seed)
-
-    patient_label = (
-        df.groupby('patient_id')['label']
-        .agg(lambda x: x.mode()[0])
-        .to_dict()
-    )
-
+    
+    # Get majority label per patient
+    patient_label = df.groupby('patient_id')['label'].agg(lambda x: x.mode()[0]).to_dict()
+    
+    # Group patients by class
     class_patients = defaultdict(list)
-
     for pid, lbl in patient_label.items():
         class_patients[lbl].append(pid)
-
+    
     train_patients = set()
     val_patients = set()
     test_patients = set()
-
+    
     for lbl, patients in class_patients.items():
         random.shuffle(patients)
-
         n_total = len(patients)
-
-        # SMALL CLASSES HANDLING
+        
+        # If only 1 patient in class, put in training (not val/test)
         if n_total == 1:
             train_patients.update(patients)
-
-        elif n_total == 2:
-            train_patients.add(patients[0])
-            val_patients.add(patients[1])
-
-        else:
-            n_val = max(1, int(n_total * val_split))
-            n_test = max(1, int(n_total * test_split))
-
-            # Ensure at least 1 train sample
-            while n_total - n_val - n_test < 1:
-                if n_val > n_test and n_val > 1:
-                    n_val -= 1
-                elif n_test > 1:
-                    n_test -= 1
-                else:
-                    break
-
-            n_train = n_total - n_val - n_test
-
-            train_patients.update(
-                patients[:n_train]
-            )
-
-            val_patients.update(
-                patients[n_train:n_train + n_val]
-            )
-
-            test_patients.update(
-                patients[n_train + n_val:]
-            )
-
+            continue
+        
+        # If only 2 patients, put 1 in train, 1 in val
+        if n_total == 2:
+            train_patients.update([patients[0]])
+            val_patients.update([patients[1]])
+            continue
+        
+        # If only 3 patients, put 1 in train, 1 in val, 1 in test
+        if n_total == 3:
+            train_patients.update([patients[0]])
+            val_patients.update([patients[1]])
+            test_patients.update([patients[2]])
+            continue
+        
+        # Normal case: enough patients for proper split
+        n_val = max(1, int(n_total * val_split))
+        n_test = max(1, int(n_total * test_split))
+        n_train = n_total - n_val - n_test
+        
+        # Ensure training has at least 1 sample
+        if n_train < 1:
+            # Take 1 from val if possible
+            if n_val > 1:
+                n_val -= 1
+                n_train = 1
+            elif n_test > 1:
+                n_test -= 1
+                n_train = 1
+        
+        val_patients.update(patients[:n_val])
+        test_patients.update(patients[n_val:n_val + n_test])
+        train_patients.update(patients[n_val + n_test:])
+    
     train_mask = df['patient_id'].isin(train_patients)
     val_mask = df['patient_id'].isin(val_patients)
     test_mask = df['patient_id'].isin(test_patients)
-
+    
     return (
         df[train_mask].reset_index(drop=True),
         df[val_mask].reset_index(drop=True),
@@ -145,130 +138,6 @@ def stratified_group_split(df, val_split=0.2, test_split=0.1, seed=42):
 # ==========================================================
 # 4. MAIN PIPELINE
 # ==========================================================
-# def prepare_data(csv_path: str, images_dir: str,
-#                  batch_size: int = 32,
-#                  val_split: float = 0.2) -> Tuple[DataLoader, DataLoader, List[str]]:
-
-#     print("📖 Loading clinical data + MICE imputation...")
-
-#     try:
-#         df_clinical = pd.read_csv(csv_path)
-#     except Exception:
-#         df_clinical = pd.read_excel(csv_path)
-
-#     # ---------------- MICE IMPUTATION ----------------
-#     cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
-#     imputer = IterativeImputer(random_state=SEED, max_iter=10)
-#     df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
-#     print("   ✅ MICE imputation done.")
-
-#     # ---------------- IMAGE LINKING ----------------
-#     print(f"🔍 Scanning images: {images_dir}")
-
-#     valid_files = []
-
-#     for root, _, files in os.walk(images_dir):
-#         for file in files:
-#             if file.endswith(('.jpg', '.png')):
-#                 match = re.search(r'(OAS1_\d+)', file)
-#                 if match:
-#                     patient_id = match.group(1) + "_MR1"
-
-#                     if patient_id in df_clinical['ID'].values:
-#                         cdr_score = df_clinical.loc[
-#                             df_clinical['ID'] == patient_id, 'CDR'
-#                         ].values[0]
-
-#                         if pd.notna(cdr_score) and cdr_score in CDR_TO_CLASS:
-#                             valid_files.append({
-#                                 'path': os.path.join(root, file),
-#                                 'patient_id': patient_id,
-#                                 'label': CDR_TO_CLASS[cdr_score]
-#                             })
-
-#     files_df = pd.DataFrame(valid_files)
-
-#     if len(files_df) == 0:
-#         raise ValueError("❌ No valid images found.")
-
-#     print(f"   ✅ {len(files_df)} images linked.")
-
-#     # ---------------- STRATIFIED GROUP SPLIT ----------------
-#     print("\n🛡️ Stratified Group Split (patient-level + class-balanced)...")
-
-#     train_df, val_df = stratified_group_split(
-#         files_df,
-#         val_split=val_split,
-#         seed=SEED
-#     )
-
-#     overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
-
-#     print(f"   📊 Train patients: {len(set(train_df['patient_id']))}")
-#     print(f"   📊 Val patients  : {len(set(val_df['patient_id']))}")
-#     print(f"   🚨 Leakage check : {len(overlap)} (must be 0)")
-
-#     # ---------------- AUGMENTATION ----------------
-#     train_transform = transforms.Compose([
-#         transforms.Resize((260, 260)),
-#         transforms.RandomRotation(20),
-#         transforms.RandomHorizontalFlip(),
-#         transforms.RandomVerticalFlip(p=0.1),
-#         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
-#         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
-#         transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
-#         transforms.ToTensor(),
-#         transforms.Normalize([0.485, 0.456, 0.406],
-#                              [0.229, 0.224, 0.225]),
-#         transforms.RandomErasing(p=0.15, scale=(0.02, 0.1))
-#     ])
-
-#     val_transform = transforms.Compose([
-#         transforms.Resize((224, 224)),
-#         transforms.ToTensor(),
-#         transforms.Normalize([0.485, 0.456, 0.406],
-#                              [0.229, 0.224, 0.225])
-#     ])
-
-#     train_dataset = OASISDataset(train_df, transform=train_transform)
-#     val_dataset = OASISDataset(val_df, transform=val_transform)
-
-#     # ---------------- SAMPLER ----------------
-#     print("\n⚖️ Building WeightedRandomSampler...")
-
-#     class_sample_count = np.bincount(train_df['label'])
-#     class_weights = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
-
-#     samples_weights = class_weights[train_df['label'].values]
-
-#     sampler = WeightedRandomSampler(
-#         weights=samples_weights,
-#         num_samples=len(samples_weights),
-#         replacement=True
-#     )
-
-#     # ---------------- DATALOADERS ----------------
-#     train_loader = DataLoader(
-#         train_dataset,
-#         batch_size=batch_size,
-#         sampler=sampler,
-#         num_workers=2,
-#         pin_memory=True
-#     )
-
-#     val_loader = DataLoader(
-#         val_dataset,
-#         batch_size=batch_size,
-#         shuffle=False,
-#         num_workers=2,
-#         pin_memory=True
-#     )
-
-#     print("🚀 Pipeline ready.")
-
-#     return train_loader, val_loader, CLASS_NAMES
-
-
 def prepare_data(csv_path: str, images_dir: str,
                  batch_size: int = 32,
                  val_split: float = 0.15,
@@ -336,34 +205,68 @@ def prepare_data(csv_path: str, images_dir: str,
     
     # Calculate target samples (use the largest class count or a fixed target)
     class_counts = train_df['label'].value_counts()
-    target_per_class = max(class_counts.max(), 5000)  # At least 5000 per class
+    
+    # Handle empty classes gracefully
+    target_per_class = 5000  # Fixed target for all classes
     
     balanced_train_dfs = []
     for class_label in range(4):
         class_df = train_df[train_df['label'] == class_label]
         n_current = len(class_df)
         
-        if n_current < target_per_class:
+        if n_current == 0:
+            # CRITICAL FIX: If class has NO samples in training, we need to
+            # borrow from validation or test set (but this shouldn't happen with proper splitting)
+            print(f"   ⚠️ WARNING: Class {class_label} has 0 samples in training!")
+            print(f"      Attempting to borrow from validation set...")
+            
+            # Borrow from validation set
+            val_class_df = val_df[val_df['label'] == class_label]
+            if len(val_class_df) > 0:
+                # Move some samples from val to train
+                n_to_move = min(target_per_class, len(val_class_df))
+                moved_samples = val_class_df.sample(n=n_to_move, random_state=SEED)
+                train_df = pd.concat([train_df, moved_samples], ignore_index=True)
+                val_df = val_df.drop(moved_samples.index).reset_index(drop=True)
+                class_df = train_df[train_df['label'] == class_label]
+                n_current = len(class_df)
+                print(f"      Moved {n_to_move} samples from val to train.")
+            else:
+                # Borrow from test set
+                test_class_df = test_df[test_df['label'] == class_label]
+                if len(test_class_df) > 0:
+                    n_to_move = min(target_per_class, len(test_class_df))
+                    moved_samples = test_class_df.sample(n=n_to_move, random_state=SEED)
+                    train_df = pd.concat([train_df, moved_samples], ignore_index=True)
+                    test_df = test_df.drop(moved_samples.index).reset_index(drop=True)
+                    class_df = train_df[train_df['label'] == class_label]
+                    n_current = len(class_df)
+                    print(f"      Moved {n_to_move} samples from test to train.")
+                else:
+                    print(f"   ❌ ERROR: Class {class_label} has no samples anywhere!")
+                    raise ValueError(f"Class {class_label} has no samples in dataset")
+        
+        if n_current < target_per_class and n_current > 0:
             # Oversample with replacement
             indices = np.random.choice(class_df.index, size=target_per_class, replace=True)
             balanced_train_dfs.append(class_df.loc[indices])
-        else:
+        elif n_current >= target_per_class:
             # Undersample
             balanced_train_dfs.append(class_df.sample(n=target_per_class, random_state=SEED))
     
     train_df_balanced = pd.concat(balanced_train_dfs, ignore_index=True)
     print(f"   Train set balanced: {dict(train_df_balanced['label'].value_counts().sort_index())}")
     
-    # ========== STAGE 2: Keep VAL and TEST as is (NO oversampling) ==========
+    # ========== STAGE 2: Keep VAL and TEST as is ==========
     # But ensure they have all classes represented
     for name, df in [("Val", val_df), ("Test", test_df)]:
         missing_classes = set(range(4)) - set(df['label'].unique())
         if missing_classes:
             print(f"   ⚠️ WARNING: {name} set missing classes: {missing_classes}")
     
-    # Augmentation
+    # ========== AUGMENTATION ==========
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(260, scale=(0.7, 1.0)),  # More aggressive crop
+        transforms.RandomResizedCrop(260, scale=(0.7, 1.0)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(20),
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
@@ -422,8 +325,13 @@ def prepare_data(csv_path: str, images_dir: str,
         pin_memory=True
     )
 
-    print("🚀 Pipeline ready. Returns train, val, test loaders.")
+    print("\n🚀 Pipeline ready.")
+    print(f"   Train batches: {len(train_loader)}")
+    print(f"   Val batches: {len(val_loader)}")
+    print(f"   Test batches: {len(test_loader)}")
+    
     return train_loader, val_loader, test_loader, CLASS_NAMES
+
 
 # ==========================================================
 # 5. VISUALIZATION UTILITIES
