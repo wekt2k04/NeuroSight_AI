@@ -1,5 +1,12 @@
 """
-NeuroSight AI - Data Pipeline Module (Fixed Two-Stage Sampling)
+NeuroSight AI - Data Pipeline Module (Fixed Two-Stage Sampling with Balanced Test Set)
+=====================================================================================
+
+Fixes applied:
+- Three-way stratified split (train/val/test) with class balancing
+- Guarantees all classes appear in test set
+- Handles small patient counts gracefully
+- Two-stage sampling: oversample training set, keep val/test realistic
 """
 
 import os
@@ -62,7 +69,7 @@ class OASISDataset(Dataset):
 
 
 # ==========================================================
-# 3. STRATIFIED GROUP SPLIT (FIXED)
+# 3. STRATIFIED GROUP SPLIT (FIXED - GUARANTEES ALL CLASSES IN TEST)
 # ==========================================================
 def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
     """
@@ -120,6 +127,13 @@ def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
                 n_test -= 1
                 n_train = 1
         
+        # Ensure test has at least 1 sample for rare classes
+        if n_test < 1 and n_total > 2:
+            n_test = 1
+            n_train = n_total - n_val - n_test
+            if n_train < 0:
+                n_train = 0
+        
         val_patients.update(patients[:n_val])
         test_patients.update(patients[n_val:n_val + n_test])
         train_patients.update(patients[n_val + n_test:])
@@ -136,14 +150,77 @@ def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
 
 
 # ==========================================================
-# 4. MAIN PIPELINE
+# 4. ENSURE TEST SET HAS ALL CLASSES
+# ==========================================================
+def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class=50):
+    """
+    Ensures test set has at least target_test_per_class samples per class.
+    Borrows from train or val if needed.
+    """
+    original_test_counts = test_df['label'].value_counts().sort_index()
+    print(f"\n   Original test counts: {dict(original_test_counts)}")
+    
+    for class_label in range(4):
+        current_test_count = len(test_df[test_df['label'] == class_label])
+        
+        if current_test_count < target_test_per_class:
+            # Need more samples in test set
+            needed = target_test_per_class - current_test_count
+            
+            # Borrow from training set first
+            train_class_df = train_df[train_df['label'] == class_label]
+            if len(train_class_df) >= needed:
+                moved = train_class_df.sample(n=needed, random_state=SEED)
+                test_df = pd.concat([test_df, moved], ignore_index=True)
+                train_df = train_df.drop(moved.index).reset_index(drop=True)
+                print(f"   Moved {needed} samples of class {class_label} from train to test")
+            else:
+                # Borrow from validation set
+                val_class_df = val_df[val_df['label'] == class_label]
+                if len(val_class_df) >= needed:
+                    moved = val_class_df.sample(n=needed, random_state=SEED)
+                    test_df = pd.concat([test_df, moved], ignore_index=True)
+                    val_df = val_df.drop(moved.index).reset_index(drop=True)
+                    print(f"   Moved {needed} samples of class {class_label} from val to test")
+                else:
+                    # Take what we can from both
+                    moved_train = train_class_df.sample(n=min(len(train_class_df), needed), random_state=SEED)
+                    test_df = pd.concat([test_df, moved_train], ignore_index=True)
+                    train_df = train_df.drop(moved_train.index).reset_index(drop=True)
+                    needed -= len(moved_train)
+                    
+                    if needed > 0:
+                        moved_val = val_class_df.sample(n=min(len(val_class_df), needed), random_state=SEED)
+                        test_df = pd.concat([test_df, moved_val], ignore_index=True)
+                        val_df = val_df.drop(moved_val.index).reset_index(drop=True)
+                        print(f"   Moved {len(moved_train) + len(moved_val)} samples of class {class_label} to test")
+    
+    new_test_counts = test_df['label'].value_counts().sort_index()
+    print(f"   New test counts: {dict(new_test_counts)}")
+    
+    return train_df, val_df, test_df
+
+
+# ==========================================================
+# 5. MAIN PIPELINE
 # ==========================================================
 def prepare_data(csv_path: str, images_dir: str,
                  batch_size: int = 32,
                  val_split: float = 0.15,
-                 test_split: float = 0.15) -> Tuple[DataLoader, DataLoader, DataLoader, List[str]]:
+                 test_split: float = 0.15,
+                 target_train_per_class: int = 5000,
+                 target_test_per_class: int = 50) -> Tuple[DataLoader, DataLoader, DataLoader, List[str]]:
     """
     Returns train_loader, val_loader, test_loader, class_names
+    
+    Args:
+        csv_path: Path to clinical data CSV/Excel file
+        images_dir: Path to directory containing images
+        batch_size: Batch size for DataLoaders
+        val_split: Fraction of patients to use for validation
+        test_split: Fraction of patients to use for test
+        target_train_per_class: Target samples per class in training (after balancing)
+        target_test_per_class: Minimum samples per class in test set
     """
     print("📖 Loading clinical data + MICE imputation...")
 
@@ -195,19 +272,19 @@ def prepare_data(csv_path: str, images_dir: str,
     )
     
     # Print split statistics
-    print(f"\n📊 SPLIT STATISTICS:")
+    print(f"\n📊 INITIAL SPLIT STATISTICS:")
     for name, df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
         counts = df['label'].value_counts().sort_index()
         print(f"   {name}: {dict(counts)}")
     
+    # Ensure test set has all classes
+    print(f"\n🔄 Ensuring test set has all classes...")
+    train_df, val_df, test_df = ensure_test_has_all_classes(
+        train_df, val_df, test_df, target_test_per_class=target_test_per_class
+    )
+    
     # ========== STAGE 1: TRAIN SET BALANCING (OVERSAMPLING) ==========
-    print("\n⚖️ STAGE 1: Balancing TRAIN set with oversampling...")
-    
-    # Calculate target samples (use the largest class count or a fixed target)
-    class_counts = train_df['label'].value_counts()
-    
-    # Handle empty classes gracefully
-    target_per_class = 5000  # Fixed target for all classes
+    print(f"\n⚖️ STAGE 1: Balancing TRAIN set to {target_train_per_class} samples per class...")
     
     balanced_train_dfs = []
     for class_label in range(4):
@@ -215,54 +292,31 @@ def prepare_data(csv_path: str, images_dir: str,
         n_current = len(class_df)
         
         if n_current == 0:
-            # CRITICAL FIX: If class has NO samples in training, we need to
-            # borrow from validation or test set (but this shouldn't happen with proper splitting)
             print(f"   ⚠️ WARNING: Class {class_label} has 0 samples in training!")
-            print(f"      Attempting to borrow from validation set...")
-            
-            # Borrow from validation set
-            val_class_df = val_df[val_df['label'] == class_label]
-            if len(val_class_df) > 0:
-                # Move some samples from val to train
-                n_to_move = min(target_per_class, len(val_class_df))
-                moved_samples = val_class_df.sample(n=n_to_move, random_state=SEED)
-                train_df = pd.concat([train_df, moved_samples], ignore_index=True)
-                val_df = val_df.drop(moved_samples.index).reset_index(drop=True)
-                class_df = train_df[train_df['label'] == class_label]
-                n_current = len(class_df)
-                print(f"      Moved {n_to_move} samples from val to train.")
-            else:
-                # Borrow from test set
-                test_class_df = test_df[test_df['label'] == class_label]
-                if len(test_class_df) > 0:
-                    n_to_move = min(target_per_class, len(test_class_df))
-                    moved_samples = test_class_df.sample(n=n_to_move, random_state=SEED)
-                    train_df = pd.concat([train_df, moved_samples], ignore_index=True)
-                    test_df = test_df.drop(moved_samples.index).reset_index(drop=True)
-                    class_df = train_df[train_df['label'] == class_label]
-                    n_current = len(class_df)
-                    print(f"      Moved {n_to_move} samples from test to train.")
-                else:
-                    print(f"   ❌ ERROR: Class {class_label} has no samples anywhere!")
-                    raise ValueError(f"Class {class_label} has no samples in dataset")
+            # This shouldn't happen with proper splitting
+            continue
         
-        if n_current < target_per_class and n_current > 0:
+        if n_current < target_train_per_class:
             # Oversample with replacement
-            indices = np.random.choice(class_df.index, size=target_per_class, replace=True)
+            indices = np.random.choice(class_df.index, size=target_train_per_class, replace=True)
             balanced_train_dfs.append(class_df.loc[indices])
-        elif n_current >= target_per_class:
+            print(f"   Class {class_label}: oversampled from {n_current} to {target_train_per_class}")
+        elif n_current > target_train_per_class:
             # Undersample
-            balanced_train_dfs.append(class_df.sample(n=target_per_class, random_state=SEED))
+            balanced_train_dfs.append(class_df.sample(n=target_train_per_class, random_state=SEED))
+            print(f"   Class {class_label}: undersampled from {n_current} to {target_train_per_class}")
+        else:
+            balanced_train_dfs.append(class_df)
+            print(f"   Class {class_label}: already at {n_current}")
     
     train_df_balanced = pd.concat(balanced_train_dfs, ignore_index=True)
-    print(f"   Train set balanced: {dict(train_df_balanced['label'].value_counts().sort_index())}")
+    print(f"\n   ✅ Train set balanced: {dict(train_df_balanced['label'].value_counts().sort_index())}")
     
     # ========== STAGE 2: Keep VAL and TEST as is ==========
-    # But ensure they have all classes represented
+    # (no oversampling for realistic evaluation)
     for name, df in [("Val", val_df), ("Test", test_df)]:
-        missing_classes = set(range(4)) - set(df['label'].unique())
-        if missing_classes:
-            print(f"   ⚠️ WARNING: {name} set missing classes: {missing_classes}")
+        counts = df['label'].value_counts().sort_index()
+        print(f"   {name} set (natural distribution): {dict(counts)}")
     
     # ========== AUGMENTATION ==========
     train_transform = transforms.Compose([
@@ -334,7 +388,7 @@ def prepare_data(csv_path: str, images_dir: str,
 
 
 # ==========================================================
-# 5. VISUALIZATION UTILITIES
+# 6. VISUALIZATION UTILITIES
 # ==========================================================
 def plot_class_distribution(dataloader: DataLoader, classes: List[str]) -> None:
     labels = []
