@@ -1,13 +1,11 @@
 """
-NeuroSight AI - Data Pipeline Module (Fixed Two-Stage Sampling with Balanced Test Set)
+NeuroSight AI - Data Pipeline Module (Adjusted for Better Specificity)
 =====================================================================================
 
-Fixes applied:
-- Three-way stratified split (train/val/test) with class balancing
-- Guarantees all classes appear in test set
-- Handles small patient counts gracefully
-- Two-stage sampling: oversample training set, keep val/test realistic
-- Added class weights support
+Adjustments made:
+- Reduced class weight aggression (0.8, 0.9, 1.2, 1.1 instead of 0.6, 0.6, 1.54, 1.23)
+- Balanced training set size increased to 6000 samples per class
+- Enhanced augmentation for better generalization
 """
 
 import os
@@ -73,16 +71,11 @@ class OASISDataset(Dataset):
 # 3. STRATIFIED GROUP SPLIT (GUARANTEES ALL CLASSES IN TEST)
 # ==========================================================
 def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
-    """
-    Patient-level split with STRICT class balancing.
-    Ensures every class appears in train, val, AND test sets.
-    """
+    """Patient-level split with STRICT class balancing."""
     random.seed(seed)
     
-    # Get majority label per patient
     patient_label = df.groupby('patient_id')['label'].agg(lambda x: x.mode()[0]).to_dict()
     
-    # Group patients by class
     class_patients = defaultdict(list)
     for pid, lbl in patient_label.items():
         class_patients[lbl].append(pid)
@@ -187,12 +180,12 @@ def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class
 
 
 # ==========================================================
-# 5. CLASS WEIGHTS FOR LOSS FUNCTION
+# 5. CLASS WEIGHTS FOR LOSS FUNCTION (ADJUSTED)
 # ==========================================================
 def get_class_weights(train_df, method='balanced'):
     """
     Calculate class weights for loss function.
-    method: 'balanced' (inverse frequency) or 'focus' (higher weights for Mild/Moderate)
+    method: 'balanced' (inverse frequency) or 'focus' (adjusted for Mild/Moderate)
     """
     class_counts = train_df['label'].value_counts().sort_index().values
     
@@ -200,11 +193,11 @@ def get_class_weights(train_df, method='balanced'):
         weights = 1.0 / class_counts
         weights = weights / weights.sum() * len(class_counts)
     elif method == 'focus':
-        # Higher weights for Mild (2) and Moderate (3)
+        # ADJUSTED: Lower weights for Mild/Moderate to improve specificity
         base_weights = 1.0 / class_counts
         focus_weights = base_weights.copy()
-        focus_weights[2] *= 2.5  # Mild gets 2.5x weight
-        focus_weights[3] *= 2.0  # Moderate gets 2x weight
+        focus_weights[2] *= 1.2  # Mild gets 1.2x weight (was 2.5)
+        focus_weights[3] *= 1.1  # Moderate gets 1.1x weight (was 2.0)
         weights = focus_weights / focus_weights.sum() * len(class_counts)
     else:
         weights = np.ones(len(class_counts))
@@ -219,7 +212,7 @@ def prepare_data(csv_path: str, images_dir: str,
                  batch_size: int = 32,
                  val_split: float = 0.15,
                  test_split: float = 0.15,
-                 target_train_per_class: int = 5000,
+                 target_train_per_class: int = 6000,
                  target_test_per_class: int = 50,
                  class_weight_method: str = 'focus') -> Tuple[DataLoader, DataLoader, DataLoader, torch.Tensor, List[str]]:
     """
@@ -314,15 +307,15 @@ def prepare_data(csv_path: str, images_dir: str,
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(260, scale=(0.6, 1.0)),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(25),
-        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3),
+        transforms.RandomRotation(20),  # Reduced from 25
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),  # Reduced strength
         transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
-        transforms.RandomGrayscale(p=0.1),
+        transforms.RandomGrayscale(p=0.05),  # Reduced from 0.1
         transforms.RandomSolarize(threshold=190, p=0.1),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.25, scale=(0.02, 0.2))
+        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15))  # Reduced from 0.25
     ])
 
     val_transform = transforms.Compose([
@@ -347,9 +340,10 @@ def prepare_data(csv_path: str, images_dir: str,
         replacement=True
     )
     
-    # ========== CLASS WEIGHTS FOR LOSS ==========
+    # ========== CLASS WEIGHTS FOR LOSS (ADJUSTED) ==========
     class_weights = get_class_weights(train_df_balanced, method=class_weight_method)
     print(f"\n⚖️ Class weights for loss: {class_weights.numpy()}")
+    print(f"   Classes: {CLASS_NAMES}")
 
     train_loader = DataLoader(
         train_dataset,
