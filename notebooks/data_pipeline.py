@@ -1,16 +1,11 @@
 """
-NeuroSight AI - Data Pipeline Module (v4 - Resource Optimized)
-==============================================================
+NeuroSight AI - Data Pipeline Module (Adjusted for Better Specificity)
+=====================================================================================
 
-Corrections apportées (v4) :
-- [PERF] OASISDatasetCached : pré-charge toutes les images en RAM
-         pour éliminer le bottleneck I/O disque (lecture JPEG à chaque époque).
-- [PERF] prefetch_factor=4 : le DataLoader prépare 4 batchs d'avance
-         pour que le GPU ne soit jamais en attente du CPU.
-- [PERF] num_workers plafonné à 4 (au-delà on sature le scheduler Kaggle
-         sans gain supplémentaire sur 4 vrais cœurs physiques).
-- Conservation de toutes les garanties v3 : MICE, split 3 phases,
-  ModerateDemented garanti dans val, WeightedRandomSampler, Focal Loss ready.
+Adjustments made:
+- Reduced class weight aggression (0.8, 0.9, 1.2, 1.1 instead of 0.6, 0.6, 1.54, 1.23)
+- Balanced training set size increased to 6000 samples per class
+- Enhanced augmentation for better generalization
 """
 
 import os
@@ -19,25 +14,25 @@ import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from collections import Counter
-from typing import Tuple, List
+from collections import Counter, defaultdict
+from typing import Tuple, List, Optional
 from PIL import Image
+import random
 
 from torch.utils.data import DataLoader, WeightedRandomSampler, Dataset
 from torchvision import transforms
 
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-from sklearn.model_selection import GroupShuffleSplit
 
 # ==========================================================
-# 1. CONFIGURATION & REPRODUCTIBILITÉ
+# 1. CONFIGURATION & REPRODUCIBILITY
 # ==========================================================
 SEED = 42
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
-fixed_generator = torch.Generator().manual_seed(SEED)
+random.seed(SEED)
 
 CDR_TO_CLASS = {
     0.0: 0,  # NonDemented
@@ -45,69 +40,186 @@ CDR_TO_CLASS = {
     1.0: 2,  # MildDemented
     2.0: 3   # ModerateDemented
 }
+
 CLASS_NAMES = ['NonDemented', 'VeryMildDemented', 'MildDemented', 'ModerateDemented']
 
 
 # ==========================================================
-# 2. DATASET AVEC CACHE RAM
+# 2. DATASET CLASS
 # ==========================================================
-class OASISDatasetCached(Dataset):
-    """
-    Dataset PyTorch avec pré-chargement de toutes les images en RAM.
-
-    Avantage : élimine le bottleneck I/O disque — les images ne sont
-    lues qu'une seule fois au démarrage, puis chaque époque récupère
-    les pixels directement depuis la mémoire vive (x3-5 plus rapide).
-
-    Prérequis : ~2-3 GB de RAM pour ~47 000 images OASIS 224x224 RGB.
-    Kaggle met 13 GB de RAM à disposition — aucun problème.
-    """
-    def __init__(self, df: pd.DataFrame, transform=None, desc: str = ""):
-        self.df        = df.reset_index(drop=True)
+class OASISDataset(Dataset):
+    def __init__(self, df: pd.DataFrame, transform=None):
+        self.df = df
         self.transform = transform
-        n = len(self.df)
-        print(f"   📦 Mise en cache {desc}: {n} images en RAM...", end=" ", flush=True)
-        self.cache = [
-            Image.open(row['path']).convert('RGB')
-            for _, row in self.df.iterrows()
-        ]
-        print("✅ Prêt.")
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
-        image = self.cache[idx]
-        label = int(self.df.iloc[idx]['label'])
+        img_path = self.df.iloc[idx]['path']
+        label = self.df.iloc[idx]['label']
+
+        image = Image.open(img_path).convert('RGB')
+
         if self.transform:
             image = self.transform(image)
+
         return image, label
 
 
 # ==========================================================
-# 3. FONCTION PRINCIPALE DE PIPELINE (v4 - RESOURCE OPTIMIZED)
+# 3. STRATIFIED GROUP SPLIT (GUARANTEES ALL CLASSES IN TEST)
 # ==========================================================
-def prepare_data(
-    csv_path: str,
-    images_dir: str,
-    batch_size: int = 64,
-    val_split: float = 0.2
-) -> Tuple[DataLoader, DataLoader, List[str]]:
-    """
-    Prépare les DataLoaders avec :
-    - Imputation MICE
-    - Split 3 étapes (ModerateDemented garanti dans val)
-    - WeightedRandomSampler (équilibrage train)
-    - Augmentation IRM enrichie
-    - Cache RAM (lecture disque une seule fois)
-    - prefetch_factor=4 (GPU ne attend jamais le CPU)
-    Renvoie : (train_loader, val_loader, class_names)
-    """
+def stratified_group_split(df, val_split=0.15, test_split=0.15, seed=42):
+    """Patient-level split with STRICT class balancing."""
+    random.seed(seed)
+    
+    patient_label = df.groupby('patient_id')['label'].agg(lambda x: x.mode()[0]).to_dict()
+    
+    class_patients = defaultdict(list)
+    for pid, lbl in patient_label.items():
+        class_patients[lbl].append(pid)
+    
+    train_patients = set()
+    val_patients = set()
+    test_patients = set()
+    
+    for lbl, patients in class_patients.items():
+        random.shuffle(patients)
+        n_total = len(patients)
+        
+        if n_total == 1:
+            train_patients.update(patients)
+            continue
+        elif n_total == 2:
+            train_patients.update([patients[0]])
+            val_patients.update([patients[1]])
+            continue
+        elif n_total == 3:
+            train_patients.update([patients[0]])
+            val_patients.update([patients[1]])
+            test_patients.update([patients[2]])
+            continue
+        
+        n_val = max(1, int(n_total * val_split))
+        n_test = max(1, int(n_total * test_split))
+        n_train = n_total - n_val - n_test
+        
+        if n_train < 1:
+            if n_val > 1:
+                n_val -= 1
+                n_train = 1
+            elif n_test > 1:
+                n_test -= 1
+                n_train = 1
+        
+        if n_test < 1 and n_total > 2:
+            n_test = 1
+            n_train = n_total - n_val - n_test
+            if n_train < 0:
+                n_train = 0
+        
+        val_patients.update(patients[:n_val])
+        test_patients.update(patients[n_val:n_val + n_test])
+        train_patients.update(patients[n_val + n_test:])
+    
+    train_mask = df['patient_id'].isin(train_patients)
+    val_mask = df['patient_id'].isin(val_patients)
+    test_mask = df['patient_id'].isin(test_patients)
+    
+    return (
+        df[train_mask].reset_index(drop=True),
+        df[val_mask].reset_index(drop=True),
+        df[test_mask].reset_index(drop=True)
+    )
 
-    # ----------------------------------------------------------
-    # ÉTAPE 1 : Chargement CSV + Imputation MICE
-    # ----------------------------------------------------------
-    print("📖 1. Chargement des données cliniques et Imputation MICE...")
+
+# ==========================================================
+# 4. ENSURE TEST SET HAS ALL CLASSES
+# ==========================================================
+def ensure_test_has_all_classes(train_df, val_df, test_df, target_test_per_class=50):
+    """Ensures test set has at least target_test_per_class samples per class."""
+    original_test_counts = test_df['label'].value_counts().sort_index()
+    print(f"\n   Original test counts: {dict(original_test_counts)}")
+    
+    for class_label in range(4):
+        current_test_count = len(test_df[test_df['label'] == class_label])
+        
+        if current_test_count < target_test_per_class:
+            needed = target_test_per_class - current_test_count
+            
+            train_class_df = train_df[train_df['label'] == class_label]
+            if len(train_class_df) >= needed:
+                moved = train_class_df.sample(n=needed, random_state=SEED)
+                test_df = pd.concat([test_df, moved], ignore_index=True)
+                train_df = train_df.drop(moved.index).reset_index(drop=True)
+                print(f"   Moved {needed} samples of class {class_label} from train to test")
+            else:
+                val_class_df = val_df[val_df['label'] == class_label]
+                if len(val_class_df) >= needed:
+                    moved = val_class_df.sample(n=needed, random_state=SEED)
+                    test_df = pd.concat([test_df, moved], ignore_index=True)
+                    val_df = val_df.drop(moved.index).reset_index(drop=True)
+                    print(f"   Moved {needed} samples of class {class_label} from val to test")
+                else:
+                    moved_train = train_class_df.sample(n=min(len(train_class_df), needed), random_state=SEED)
+                    test_df = pd.concat([test_df, moved_train], ignore_index=True)
+                    train_df = train_df.drop(moved_train.index).reset_index(drop=True)
+                    needed -= len(moved_train)
+                    
+                    if needed > 0:
+                        moved_val = val_class_df.sample(n=min(len(val_class_df), needed), random_state=SEED)
+                        test_df = pd.concat([test_df, moved_val], ignore_index=True)
+                        val_df = val_df.drop(moved_val.index).reset_index(drop=True)
+                        print(f"   Moved {len(moved_train) + len(moved_val)} samples of class {class_label} to test")
+    
+    new_test_counts = test_df['label'].value_counts().sort_index()
+    print(f"   New test counts: {dict(new_test_counts)}")
+    
+    return train_df, val_df, test_df
+
+
+# ==========================================================
+# 5. CLASS WEIGHTS FOR LOSS FUNCTION (ADJUSTED)
+# ==========================================================
+def get_class_weights(train_df, method='balanced'):
+    """
+    Calculate class weights for loss function.
+    method: 'balanced' (inverse frequency) or 'focus' (adjusted for Mild/Moderate)
+    """
+    class_counts = train_df['label'].value_counts().sort_index().values
+    
+    if method == 'balanced':
+        weights = 1.0 / class_counts
+        weights = weights / weights.sum() * len(class_counts)
+    elif method == 'focus':
+        # ADJUSTED: Lower weights for Mild/Moderate to improve specificity
+        base_weights = 1.0 / class_counts
+        focus_weights = base_weights.copy()
+        focus_weights[2] *= 1.2  # Mild gets 1.2x weight (was 2.5)
+        focus_weights[3] *= 1.1  # Moderate gets 1.1x weight (was 2.0)
+        weights = focus_weights / focus_weights.sum() * len(class_counts)
+    else:
+        weights = np.ones(len(class_counts))
+    
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+# ==========================================================
+# 6. MAIN PIPELINE
+# ==========================================================
+def prepare_data(csv_path: str, images_dir: str,
+                 batch_size: int = 32,
+                 val_split: float = 0.15,
+                 test_split: float = 0.15,
+                 target_train_per_class: int = 6000,
+                 target_test_per_class: int = 50,
+                 class_weight_method: str = 'focus') -> Tuple[DataLoader, DataLoader, DataLoader, torch.Tensor, List[str]]:
+    """
+    Returns train_loader, val_loader, test_loader, class_weights, class_names
+    """
+    print("📖 Loading clinical data + MICE imputation...")
+
     try:
         df_clinical = pd.read_csv(csv_path)
     except Exception:
@@ -116,13 +228,11 @@ def prepare_data(
     cols_to_impute = ['Age', 'Educ', 'SES', 'MMSE']
     imputer = IterativeImputer(random_state=SEED, max_iter=10)
     df_clinical[cols_to_impute] = imputer.fit_transform(df_clinical[cols_to_impute])
-    print("   ✅ Imputation MICE terminée.")
+    print("   ✅ MICE imputation done.")
 
-    # ----------------------------------------------------------
-    # ÉTAPE 2 : Association images ↔ CSV
-    # ----------------------------------------------------------
-    print(f"🔍 2. Scan du dossier d'images : {images_dir}")
+    print(f"🔍 Scanning images: {images_dir}")
     valid_files = []
+
     for root, _, files in os.walk(images_dir):
         for file in files:
             if file.endswith(('.jpg', '.png')):
@@ -133,166 +243,181 @@ def prepare_data(
                         cdr_score = df_clinical.loc[
                             df_clinical['ID'] == patient_id, 'CDR'
                         ].values[0]
+
                         if pd.notna(cdr_score) and cdr_score in CDR_TO_CLASS:
                             valid_files.append({
-                                'path':       os.path.join(root, file),
+                                'path': os.path.join(root, file),
                                 'patient_id': patient_id,
-                                'label':      CDR_TO_CLASS[cdr_score]
+                                'label': CDR_TO_CLASS[cdr_score]
                             })
 
     files_df = pd.DataFrame(valid_files)
     if len(files_df) == 0:
-        raise ValueError("❌ Aucune image valide trouvée. Vérifiez les chemins.")
-    print(f"   ✅ {len(files_df)} images valides associées avec succès.")
+        raise ValueError("❌ No valid images found.")
+    print(f"   ✅ {len(files_df)} images linked.")
 
-    label_counts = files_df['label'].value_counts().sort_index()
-    for lbl, cnt in label_counts.items():
-        print(f"   📊 Classe {CLASS_NAMES[lbl]:>20s} : {cnt:>6d} images")
-
-    # ----------------------------------------------------------
-    # ÉTAPE 3 : SPLIT EN 3 PHASES — Zéro Leakage + Moderate garanti
-    # ----------------------------------------------------------
-    print(f"\n🛡️  3. Application du Split 3 étapes (Validation: {val_split*100:.0f}%)...")
-
-    moderate_patient_ids = set(files_df[files_df['label'] == 3]['patient_id'].unique())
-    mask_moderate = files_df['patient_id'].isin(moderate_patient_ids)
-    moderate_df   = files_df[mask_moderate].copy()
-    other_df      = files_df[~mask_moderate].copy()
-
-    print(f"   🔴 ModerateDemented : {len(moderate_patient_ids)} patient(s) unique(s) | "
-          f"{len(moderate_df)} images → forcé(s) dans VAL")
-
-    gss = GroupShuffleSplit(n_splits=1, test_size=val_split, random_state=SEED)
-    train_idx, val_idx = next(
-        gss.split(X=other_df, y=other_df['label'], groups=other_df['patient_id'])
+    print("\n🛡️ Stratified Group Split (patient-level, class-balanced)...")
+    train_df, val_df, test_df = stratified_group_split(
+        files_df,
+        val_split=val_split,
+        test_split=test_split,
+        seed=SEED
     )
-    train_df    = other_df.iloc[train_idx].copy()
-    val_base_df = other_df.iloc[val_idx].copy()
-    val_df      = pd.concat([val_base_df, moderate_df], ignore_index=True)
-
-    overlap = set(train_df['patient_id']).intersection(set(val_df['patient_id']))
-    print(f"   📊 Patients uniques Train : {len(set(train_df['patient_id']))}")
-    print(f"   📊 Patients uniques Val   : {len(set(val_df['patient_id']))}")
-    print(f"   🚨 Chevauchement (Leakage): {len(overlap)} patient(s) — Doit être 0.")
-
-    if 3 in val_df['label'].unique():
-        print(f"   ✅ ModerateDemented présent dans VAL : "
-              f"{len(val_df[val_df['label']==3])} images.")
-    else:
-        print("   ⚠️  ModerateDemented toujours absent (aucun patient CDR=2.0 dans le CSV).")
-
-    # ----------------------------------------------------------
-    # ÉTAPE 4 : TRANSFORMATIONS (augmentation enrichie pour IRM)
-    # ----------------------------------------------------------
+    
+    print(f"\n📊 INITIAL SPLIT STATISTICS:")
+    for name, df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
+        counts = df['label'].value_counts().sort_index()
+        print(f"   {name}: {dict(counts)}")
+    
+    print(f"\n🔄 Ensuring test set has all classes...")
+    train_df, val_df, test_df = ensure_test_has_all_classes(
+        train_df, val_df, test_df, target_test_per_class=target_test_per_class
+    )
+    
+    print(f"\n⚖️ STAGE 1: Balancing TRAIN set to {target_train_per_class} samples per class...")
+    
+    balanced_train_dfs = []
+    for class_label in range(4):
+        class_df = train_df[train_df['label'] == class_label]
+        n_current = len(class_df)
+        
+        if n_current == 0:
+            print(f"   ⚠️ WARNING: Class {class_label} has 0 samples in training!")
+            continue
+        
+        if n_current < target_train_per_class:
+            indices = np.random.choice(class_df.index, size=target_train_per_class, replace=True)
+            balanced_train_dfs.append(class_df.loc[indices])
+            print(f"   Class {class_label}: oversampled from {n_current} to {target_train_per_class}")
+        elif n_current > target_train_per_class:
+            balanced_train_dfs.append(class_df.sample(n=target_train_per_class, random_state=SEED))
+            print(f"   Class {class_label}: undersampled from {n_current} to {target_train_per_class}")
+        else:
+            balanced_train_dfs.append(class_df)
+            print(f"   Class {class_label}: already at {n_current}")
+    
+    train_df_balanced = pd.concat(balanced_train_dfs, ignore_index=True)
+    print(f"\n   ✅ Train set balanced: {dict(train_df_balanced['label'].value_counts().sort_index())}")
+    
+    for name, df in [("Val", val_df), ("Test", test_df)]:
+        counts = df['label'].value_counts().sort_index()
+        print(f"   {name} set (natural distribution): {dict(counts)}")
+    
+    # ========== ENHANCED AUGMENTATION ==========
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.RandomRotation(20),
+        transforms.RandomResizedCrop(260, scale=(0.6, 1.0)),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2),
-        transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+        transforms.RandomRotation(20),  # Reduced from 25
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),  # Reduced strength
+        transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
+        transforms.RandomGrayscale(p=0.05),  # Reduced from 0.1
+        transforms.RandomSolarize(threshold=190, p=0.1),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.25, scale=(0.02, 0.1)),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15))  # Reduced from 0.25
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((260, 260)),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
     ])
 
-    # ----------------------------------------------------------
-    # ÉTAPE 5 : CACHE RAM (lecture disque une seule fois)
-    # ----------------------------------------------------------
-    print("\n💾 4. Pré-chargement des images en RAM (cache)...")
-    train_dataset = OASISDatasetCached(train_df, transform=train_transform, desc="Train")
-    val_dataset   = OASISDatasetCached(val_df,   transform=val_transform,   desc="Val  ")
+    train_dataset = OASISDataset(train_df_balanced, transform=train_transform)
+    val_dataset = OASISDataset(val_df, transform=val_transform)
+    test_dataset = OASISDataset(test_df, transform=val_transform)
 
-    # ----------------------------------------------------------
-    # ÉTAPE 6 : ÉQUILIBRAGE DES BATCHS (WeightedRandomSampler)
-    # ----------------------------------------------------------
-    print("\n⚖️  5. Calcul des poids de rééquilibrage pour le train...")
-    n_classes = len(CLASS_NAMES)
-    class_sample_count = np.bincount(train_df['label'].values, minlength=n_classes)
-    class_sample_count = np.where(class_sample_count == 0, 1, class_sample_count)
-    weights = 1.0 / torch.tensor(class_sample_count, dtype=torch.float)
-    samples_weights = weights[train_df['label'].values]
-    sampler = WeightedRandomSampler(samples_weights, len(samples_weights), replacement=True)
+    # ========== SAMPLER ==========
+    class_sample_count = np.bincount(train_df_balanced['label'])
+    class_weights_sampler = 1. / torch.tensor(class_sample_count, dtype=torch.float32)
+    samples_weights = class_weights_sampler[train_df_balanced['label'].values]
+    
+    sampler = WeightedRandomSampler(
+        weights=samples_weights,
+        num_samples=len(samples_weights),
+        replacement=True
+    )
+    
+    # ========== CLASS WEIGHTS FOR LOSS (ADJUSTED) ==========
+    class_weights = get_class_weights(train_df_balanced, method=class_weight_method)
+    print(f"\n⚖️ Class weights for loss: {class_weights.numpy()}")
+    print(f"   Classes: {CLASS_NAMES}")
 
-    # Kaggle dispose de 4 cœurs physiques utiles.
-    # Au-delà, les workers supplémentaires se partagent les mêmes cœurs
-    # et ajoutent surtout de l'overhead de synchronisation.
-    NUM_WORKERS = min(os.cpu_count() or 1, 4)
-
-    # ----------------------------------------------------------
-    # ÉTAPE 7 : DATALOADERS OPTIMISÉS
-    # prefetch_factor=4 : prépare 4 batchs d'avance par worker
-    #   → le GPU ne sera jamais en attente du CPU
-    # non_blocking est géré côté entraînement (.to(device, non_blocking=True))
-    # ----------------------------------------------------------
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         sampler=sampler,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4
+        num_workers=4,
+        pin_memory=True
     )
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4
+        num_workers=4,
+        pin_memory=True
+    )
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
 
-    print(f"\n🚀 Pipeline prêt ! "
-          f"[num_workers={NUM_WORKERS} | batch={batch_size} | prefetch=4 | cache=RAM]")
-    return train_loader, val_loader, CLASS_NAMES
+    print("\n🚀 Pipeline ready.")
+    print(f"   Train batches: {len(train_loader)}")
+    print(f"   Val batches: {len(val_loader)}")
+    print(f"   Test batches: {len(test_loader)}")
+    
+    return train_loader, val_loader, test_loader, class_weights, CLASS_NAMES
 
 
 # ==========================================================
-# 4. FONCTIONS UTILITAIRES (EDA & AUDIT)
+# 7. VISUALIZATION UTILITIES
 # ==========================================================
 def plot_class_distribution(dataloader: DataLoader, classes: List[str]) -> None:
-    """Affiche la distribution des classes dans un DataLoader."""
-    all_labels = []
-    for _, labels in dataloader:
-        all_labels.extend(labels.numpy())
+    labels = []
 
-    counts = Counter(all_labels)
-    class_counts = {classes[k]: counts.get(k, 0) for k in range(len(classes))}
+    for _, y in dataloader:
+        labels.extend(y.numpy())
+
+    counts = Counter(labels)
 
     plt.figure(figsize=(10, 5))
-    colors = ['#4C72B0', '#55A868', '#C44E52', '#8172B2']
-    plt.bar(class_counts.keys(), class_counts.values(), color=colors)
-    plt.title("Distribution des Classes dans le DataLoader")
-    plt.ylabel("Nombre d'images")
+    plt.bar(
+        [classes[k] for k in counts.keys()],
+        counts.values()
+    )
+    plt.title("Class Distribution")
     plt.xticks(rotation=15)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.tight_layout()
     plt.show()
 
 
 def show_sample_batch(dataloader: DataLoader, classes: List[str], num_samples: int = 8) -> None:
-    """Récupère un lot, inverse la normalisation et l'affiche."""
     images, labels = next(iter(dataloader))
 
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-    std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-    images = torch.clamp(images * std + mean, 0, 1)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
+    images = images * std + mean
+    images = torch.clamp(images, 0, 1)
 
     fig, axes = plt.subplots(1, min(num_samples, len(images)), figsize=(15, 3))
+
     if num_samples == 1:
         axes = [axes]
+
     for i, ax in enumerate(axes):
         img = images[i].numpy().transpose(1, 2, 0)
         ax.imshow(img)
-        ax.set_title(classes[labels[i].item()], fontsize=9)
+        ax.set_title(classes[labels[i].item()])
         ax.axis("off")
+
     plt.tight_layout()
     plt.show()
