@@ -83,3 +83,18 @@ desktop.ini
 *.suo
 *.user
 *.sln.docstates
+
+# ============================
+# Build CLI artifacts (CMake/VS)
+# ============================
+src/cpp_app/NeuroSightAI_Desktop/build_cli/
+src/cpp_app/NeuroSightAI_Desktop/build/
+
+# ============================
+# Binaires tiers
+# ============================
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exe
