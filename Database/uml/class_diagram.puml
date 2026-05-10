@@ -1,0 +1,69 @@
+@startuml NeuroSight_ClassDiagram
+hide methods
+skinparam classAttributeIconSize 0
+
+class Patient {
+  +patient_id: INT
+  anonymous_code: VARCHAR(50) <<UQ>>
+  age_group: ENUM
+  gender: ENUM
+}
+
+class User {
+  +user_id: INT
+  username: VARCHAR(50) <<UQ>>
+  email: VARCHAR(100) <<UQ>>
+  role: ENUM
+  is_active: BOOLEAN
+}
+
+class MRIScan {
+  +scan_id: INT
+  patient_id: INT <<FK>>
+  scan_date: DATE
+  file_path: VARCHAR(500)
+  file_format: ENUM
+  processing_time_ms: INT
+}
+
+class Diagnosis {
+  +diagnosis_id: INT
+  scan_id: INT <<FK>>
+  validated_by_user_id: INT <<FK, NULL>>
+  classification: ENUM
+  confidence_score: DECIMAL(5,2)
+  is_validated: BOOLEAN
+}
+
+class Heatmap {
+  +heatmap_id: INT
+  diagnosis_id: INT <<FK, UQ>>
+  algorithm_used: ENUM
+}
+
+class AnalysisReport {
+  +report_id: INT
+  diagnosis_id: INT <<FK, UQ>>
+  user_id: INT <<FK>>
+  report_format: VARCHAR(20)
+  download_count: INT
+}
+
+class AuditLog {
+  +log_id: BIGINT
+  user_id: INT <<FK, NULL>>
+  action_type: VARCHAR(50)
+  entity_type: VARCHAR(50)
+  entity_id: BIGINT
+  logged_at: TIMESTAMP
+}
+
+Patient "1" -- "0..*" MRIScan : owns
+MRIScan "1" -- "0..*" Diagnosis : yields
+User "0..1" -- "0..*" Diagnosis : validates
+Diagnosis "1" -- "0..1" Heatmap : has
+Diagnosis "1" -- "0..1" AnalysisReport : has
+User "1" -- "0..*" AnalysisReport : authors
+User "0..1" -- "0..*" AuditLog : triggers
+
+@enduml

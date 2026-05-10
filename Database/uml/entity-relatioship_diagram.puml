@@ -1,0 +1,84 @@
+@startuml entity-relationship-diagram
+title NeuroSight Database ER Diagram
+hide circle
+
+entity Patient {
+  +patient_id : INT <<PK>>
+  --
+  anonymous_code : VARCHAR(50) <<UQ>>
+  age_group : ENUM
+  gender : ENUM
+}
+
+entity User {
+  +user_id : INT <<PK>>
+  --
+  username : VARCHAR(50) <<UQ>>
+  email : VARCHAR(100) <<UQ>>
+  role : ENUM
+  is_active : BOOLEAN
+}
+
+entity MRIScan {
+  +scan_id : INT <<PK>>
+  --
+  patient_id : INT <<FK>>
+  scan_date : DATE
+  file_path : VARCHAR(500)
+  file_format : ENUM
+  processing_time_ms : INT
+}
+
+entity Diagnosis {
+  +diagnosis_id : INT <<PK>>
+  --
+  scan_id : INT <<FK>>
+  validated_by_user_id : INT <<FK,NULL>>
+  classification : ENUM
+  confidence_score : DECIMAL(5,2)
+  processing_timestamp : TIMESTAMP
+  is_validated : BOOLEAN
+  validated_at : TIMESTAMP
+  radiologist_notes : TEXT
+}
+
+entity Heatmap {
+  +heatmap_id : INT <<PK>>
+  --
+  diagnosis_id : INT <<FK,UQ>>
+  heatmap_file_path : VARCHAR(500)
+  algorithm_used : ENUM
+  overlay_opacity : DECIMAL(3,2)
+}
+
+entity AnalysisReport {
+  +report_id : INT <<PK>>
+  --
+  diagnosis_id : INT <<FK,UQ>>
+  user_id : INT <<FK>>
+  pdf_file_path : VARCHAR(500)
+  report_format : VARCHAR
+  generated_at : TIMESTAMP
+  last_download_at : TIMESTAMP
+  download_count : INT
+}
+
+entity AuditLog {
+  +log_id : BIGINT <<PK>>
+  --
+  user_id : INT <<FK,NULL>>
+  action_type : VARCHAR
+  entity_type : VARCHAR
+  entity_id : BIGINT
+  logged_at : DATETIME
+}
+
+Patient ||--o{ MRIScan : owns
+MRIScan ||--o{ Diagnosis : yields
+User ||--o{ Diagnosis : validates
+Diagnosis ||--o| Heatmap : has
+Diagnosis ||--o| AnalysisReport : has
+User ||--o{ AnalysisReport : authors
+User ||--o{ AuditLog : triggers
+
+@enduml

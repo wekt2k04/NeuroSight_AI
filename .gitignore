@@ -1,0 +1,85 @@
+﻿# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+*.so
+.env
+.venv
+env/
+venv/
+ENV/
+neurosight_ai_env/
+
+# ============================
+# Jupyter
+# ============================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ============================
+# Qt / CMake build artifacts
+# ============================
+src/cpp_app/NeuroSightAI_Desktop/build/
+src/cpp_app/NeuroSightAI_Desktop/build_cli/CMakeFiles/
+src/cpp_app/NeuroSightAI_Desktop/build_cli/*.dir/
+src/cpp_app/NeuroSightAI_Desktop/build_cli/NeuroSightAI_autogen/
+src/cpp_app/NeuroSightAI_Desktop/build_cli/x64/
+src/cpp_app/NeuroSightAI_Desktop/build_cli/.qt/
+src/cpp_app/NeuroSightAI_Desktop/build_cli/Debug/*.exe
+src/cpp_app/NeuroSightAI_Desktop/build_cli/Debug/*.pdb
+src/cpp_app/NeuroSightAI_Desktop/build_cli/Debug/*.ilk
+src/cpp_app/NeuroSightAI_Desktop/.qtcreator/
+
+# ============================
+# Modèles ML (trop lourds pour Git)
+# ============================
+*.onnx
+*.onnx.data
+*.pt
+*.pth
+*.h5
+
+# ============================
+# Archives / doublons
+# ============================
+ort_1.20/
+ort_1.20.zip
+
+# ============================
+# Runtime local
+# ============================
+*.db
+neurosight_log.txt
+config.ini
+
+# ============================
+# OS
+# ============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================
+# IDE
+# ============================
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln.docstates

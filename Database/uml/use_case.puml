@@ -1,0 +1,40 @@
+@startuml NeuroSight_UseCases
+left to right direction
+
+actor Radiologist as r
+actor Admin as a
+actor DataScientist as ds
+
+usecase "Upload MRI Scan" as UC_Upload
+usecase "View Diagnosis" as UC_Diagnosis
+usecase "View Heatmap" as UC_Heatmap
+usecase "Generate Report" as UC_Report
+usecase "Validate Diagnosis" as UC_Validate
+
+usecase "Manage Users" as UC_Users
+usecase "View Audit Logs" as UC_Audit
+
+usecase "Train Model" as UC_Train
+usecase "Deploy Model" as UC_Deploy
+usecase "Monitor Model Performance" as UC_Monitor
+
+r --> UC_Upload
+r --> UC_Diagnosis
+r --> UC_Heatmap
+r --> UC_Report
+r --> UC_Validate
+
+a --> UC_Users
+a --> UC_Audit
+
+ds --> UC_Train
+ds --> UC_Deploy
+ds --> UC_Monitor
+
+UC_Report ..> UC_Diagnosis : <<include>>
+UC_Heatmap ..> UC_Diagnosis : <<extend>>
+UC_Validate ..> UC_Diagnosis : <<extend>>
+UC_Deploy ..> UC_Train : <<include>>
+UC_Monitor ..> UC_Deploy : <<include>>
+
+@enduml

@@ -1,0 +1,426 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1360</width>
+    <height>860</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>NeuroSight AI</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QMainWindow { background-color: #0c1118; }
+QWidget { color: #d7e1ef; font-family: &quot;Segoe UI&quot;; }
+QGroupBox {
+    border: 1px solid #243346;
+    border-radius: 12px;
+    margin-top: 14px;
+    background: #131b26;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    color: #9ec8ff;
+    font-weight: 600;
+}
+QPushButton {
+    border-radius: 10px;
+    border: 1px solid #2f4662;
+    padding: 10px 14px;
+    font-weight: 600;
+}
+QPushButton#uploadButton {
+    background-color: #22476b;
+}
+QPushButton#uploadButton:hover {
+    background-color: #2a5b89;
+}
+QPushButton#analyzeButton {
+    background-color: #1c7b58;
+    border-color: #2ca677;
+    font-size: 16px;
+}
+QPushButton#analyzeButton:hover {
+    background-color: #229468;
+}
+QPushButton#analyzeButton:disabled {
+    background-color: #263341;
+    color: #8fa2b7;
+    border-color: #354559;
+}
+QLabel#imagePreviewLabel, QLabel#heatmapLabel {
+    border: 1px solid #2f4155;
+    border-radius: 10px;
+    background-color: #101722;
+    color: #7d92ad;
+}
+QLineEdit#diseaseStageLabel {
+    background-color: #0f1621;
+    border: 1px solid #35557a;
+    border-radius: 8px;
+    padding: 8px;
+    color: #d4ebff;
+    font-weight: 600;
+}
+QProgressBar {
+    border: 1px solid #33475f;
+    border-radius: 8px;
+    text-align: center;
+    background: #101722;
+    color: #cce2ff;
+}
+QProgressBar::chunk {
+    background: #2f8ecf;
+    border-radius: 6px;
+}
+</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <property name="leftMargin">
+     <number>16</number>
+    </property>
+    <property name="topMargin">
+     <number>16</number>
+    </property>
+    <property name="rightMargin">
+     <number>16</number>
+    </property>
+    <property name="bottomMargin">
+     <number>16</number>
+    </property>
+    <property name="spacing">
+     <number>12</number>
+    </property>
+    <item>
+     <widget class="QFrame" name="headerFrame">
+      <property name="styleSheet">
+       <string notr="true">QFrame#headerFrame { border: 1px solid #243346; border-radius: 12px; background: #111b29; }</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_2">
+       <property name="leftMargin">
+        <number>14</number>
+       </property>
+       <property name="topMargin">
+        <number>12</number>
+       </property>
+       <property name="rightMargin">
+        <number>14</number>
+       </property>
+       <property name="bottomMargin">
+        <number>12</number>
+       </property>
+       <item>
+        <layout class="QHBoxLayout" name="horizontalLayout">
+         <item>
+          <widget class="QLabel" name="titleLabel">
+           <property name="text">
+            <string>NeuroSight AI</string>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">font-size: 26px; font-weight: 700; color: #e7f1ff;</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="subtitleLabel">
+           <property name="text">
+            <string>Neuroscience-guided workspace for dementia screening workflow</string>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">font-size: 13px; color: #9cb3cf;</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="versionLabel">
+           <property name="text">
+            <string>Desktop Clinical Flow</string>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">color: #6da4db;</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="workflowBadgeLayout">
+         <property name="spacing">
+          <number>8</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="step1Badge">
+           <property name="text">
+            <string>1. Acquire Scan</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="step2Badge">
+           <property name="text">
+            <string>2. Review Input</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="step3Badge">
+           <property name="text">
+            <string>3. Run Inference</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="step4Badge">
+           <property name="text">
+            <string>4. Interpret Outcome</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QSplitter" name="mainSplitter">
+      <property name="orientation">
+       <enum>Qt::Horizontal</enum>
+      </property>
+      <widget class="QWidget" name="leftPanel">
+       <layout class="QVBoxLayout" name="leftPanelLayout">
+        <property name="spacing">
+         <number>12</number>
+        </property>
+        <item>
+         <widget class="QGroupBox" name="uploadGroup">
+          <property name="title">
+           <string>Step 1 · Upload MRI Scan</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_3">
+           <item>
+            <widget class="QFrame" name="dragDropFrame">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>120</height>
+              </size>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">QFrame#dragDropFrame { border: 2px dashed #3b5d87; border-radius: 10px; background: #101c2a; }</string>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_6">
+              <item>
+               <widget class="QLabel" name="dragDropLabel">
+                <property name="text">
+                 <string>Drag &amp; drop an MRI scan here, or click Browse Files</string>
+                </property>
+                <property name="alignment">
+                 <set>Qt::AlignCenter</set>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="uploadButton">
+             <property name="text">
+              <string>Browse Files</string>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>42</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="imagePathLabel">
+             <property name="text">
+              <string>Selected scan: none</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="scanMetaLabel">
+             <property name="text">
+              <string>Source path:</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">color:#86a0bd; font-size: 11px;</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="previewGroup">
+          <property name="title">
+           <string>Step 2 · Visual Validation</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_4">
+           <item>
+            <widget class="QLabel" name="imagePreviewLabel">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>320</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>MRI preview will appear here</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="rightPanel">
+       <layout class="QVBoxLayout" name="rightPanelLayout">
+        <property name="spacing">
+         <number>12</number>
+        </property>
+        <item>
+         <widget class="QPushButton" name="analyzeButton">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>56</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Step 3 · Analyze Image</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QProgressBar" name="progressBar">
+          <property name="value">
+           <number>0</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="resultsGroup">
+          <property name="title">
+           <string>Step 4 · Interpretation Panel</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_5">
+           <item>
+            <widget class="QLabel" name="resultLabel">
+             <property name="text">
+              <string>Disease Stage: -</string>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">font-size: 18px; font-weight: 700; color: #e5f0ff;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="diseaseStageLabel">
+             <property name="readOnly">
+              <bool>true</bool>
+             </property>
+             <property name="placeholderText">
+              <string>Diagnostic class will be shown here</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="confidenceLabel">
+             <property name="text">
+              <string>Confidence: -</string>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">font-size: 14px; color:#8de7bd; font-weight: 600;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="heatmapLabel">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>260</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>Explainability map will appear here after inference.</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="statusLabel">
+          <property name="text">
+           <string>Ready.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="footerLabel">
+      <property name="text">
+       <string>NeuroSight AI is an aid-to-diagnosis interface. Final clinical decisions remain under medical supervision.</string>
+      </property>
+      <property name="wordWrap">
+       <bool>true</bool>
+      </property>
+      <property name="styleSheet">
+       <string notr="true">color:#7f94ae; padding:6px 10px;</string>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

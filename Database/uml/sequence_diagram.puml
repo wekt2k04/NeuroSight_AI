@@ -1,0 +1,28 @@
+@startuml NeuroSight_SequenceDiagram
+title MRI Scan Diagnosis Workflow
+
+actor Radiologist
+participant UI as UserInterface
+participant Controller as SystemController
+participant DB as Database
+participant AI as InferenceEngine
+
+Radiologist -> UI: uploadMRI(file)
+UI -> Controller: processScan(file)
+Controller -> DB: saveScanMetadata()
+DB --> Controller: scan_id
+Controller -> AI: runInference(scanData)
+AI --> Controller: diagnosisResult + heatmap
+Controller -> DB: saveDiagnosis()
+Controller -> DB: saveHeatmap()
+Controller --> UI: displayResult(result)
+UI --> Radiologist: Show Analysis Results
+
+Radiologist -> UI: generateReport()
+UI -> Controller: generateReport(diagnosis_id)
+Controller -> DB: saveReport()
+DB --> Controller: report_id
+Controller --> UI: reportReady(pdf)
+UI --> Radiologist: downloadReport()
+
+@enduml

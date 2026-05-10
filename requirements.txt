@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+onnxruntime
+pillow
+numpy
+pandas
+scikit-learn
+torch
+torchvision
+matplotlib
+python-multipart
