@@ -341,6 +341,21 @@ The desktop app implements a full authentication flow:
 - **Output**: 4-class softmax probabilities
 - **Export**: Converted to ONNX format via `torch.onnx.export()` with dynamic batch axis
 
+### Training & Evaluation Results
+
+The training/evaluation track documented in [`notebooks/NeuroSight_Analysis.ipynb`](notebooks/NeuroSight_Analysis.ipynb) goes further than the lightweight B0 pipeline above: it fuses the full [OASIS cross-sectional MRI set](https://www.kaggle.com/datasets/ninadaithal/imagesoasis) (47,580 linked slices) with the OASIS clinical/demographic table (MICE-imputed) on an **EfficientNet-B2** backbone, using a patient-level stratified group split so no patient leaks across train/val/test. On the held-out test set:
+
+| Class | Precision | Recall | F1 |
+|---|---|---|---|
+| NonDemented | 0.728 | 0.521 | 0.607 |
+| VeryMildDemented | 0.329 | 0.566 | 0.416 |
+| MildDemented | 0.351 | 0.212 | 0.264 |
+| ModerateDemented | 0.171 | 0.580 | 0.264 |
+| **Macro avg** | **0.395** | **0.470** | **0.388** |
+| **Weighted avg** | **0.572** | **0.500** | **0.514** |
+
+Reported as-is, including where it's weak: `ModerateDemented` has only 244 training patients before rebalancing, which caps precision even after class weighting, per-class loss balancing, and per-class threshold tuning (all implemented in the notebook). This is the honest evaluation of that research track, not the metric of the exact weights bundled with a given desktop build — see "Obtain Model Weights" below for how a build's weights are produced.
+
 ### Preprocessing Pipeline (C++ side)
 
 ```
